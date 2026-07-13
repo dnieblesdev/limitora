@@ -1,0 +1,94 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Coverage / test
+htmlcov/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Build
+*.manifest
+*.spec
+*.log
+
+# Logs / temp
+*.log
+*.tmp
+tmp/
+temp/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS / system
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Secrets and sensitive data
+.env
+*token*
+*cookie*
+*session*
+*credential*
+*secret*
+*apikey*
+*api_key*
+
+# Local databases and provider cache
+*.db
+*.sqlite
+*.sqlite3
+provider-cache/
+provider_cache/
+
+# Unredacted dumps and diagnostics
+*.dump
+*.diag
+diagnostics/
+unredacted*
+
+# Allow explicitly redacted artifacts
+!*.redacted.json
+!*.redacted.txt

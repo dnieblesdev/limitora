@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "limitora"
+version = "0.1.0"
+description = "Python library for provider-agnostic LLM interaction with rate limiting and safe local integration."
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "dnieblesdev", email = "dnieblesp@gmail.com"},
+]
+# TODO: Set requires-python once compatibility is validated.
+dependencies = []
+
+[project.optional-dependencies]
+# TODO: Add provider-specific extras once providers are implemented.
+
+[project.scripts]
+# TODO: Add CLI entry point once limitora.cli is implemented.
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-dir]
+"" = "src"
