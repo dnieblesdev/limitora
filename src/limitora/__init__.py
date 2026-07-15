@@ -1,1 +1,49 @@
-"""Limitora package root."""
+"""Stable public API for Limitora library consumers."""
+
+from .api import (
+    Clock,
+    CurrentClock,
+    Freshness,
+    FreshnessPolicy,
+    InvalidProviderSelectionError,
+    InvalidStatusRequestError,
+    StatusClient,
+    StatusProvider,
+    StatusRequest,
+    StatusResult,
+    StatusSnapshotResult,
+    StatusUndetectedResult,
+)
+from .models import (
+    MetricKind,
+    ProviderId,
+    ProviderSnapshot,
+    ProviderState,
+    ProviderStatus,
+    SourceMetadata,
+)
+from .providers import AuthorizationPolicy, ProviderError, ProviderErrorKind
+
+__all__ = [
+    "AuthorizationPolicy",
+    "Clock",
+    "CurrentClock",
+    "Freshness",
+    "FreshnessPolicy",
+    "InvalidProviderSelectionError",
+    "InvalidStatusRequestError",
+    "MetricKind",
+    "ProviderError",
+    "ProviderErrorKind",
+    "ProviderId",
+    "ProviderSnapshot",
+    "ProviderState",
+    "ProviderStatus",
+    "SourceMetadata",
+    "StatusClient",
+    "StatusProvider",
+    "StatusRequest",
+    "StatusResult",
+    "StatusSnapshotResult",
+    "StatusUndetectedResult",
+]
