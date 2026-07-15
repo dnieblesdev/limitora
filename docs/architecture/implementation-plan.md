@@ -1,88 +1,75 @@
 # Provider-status implementation roadmap
 
-**Decision:** sequence implementation from pure domain behavior to opt-in provider adapters. Each slice remains independently reviewable and reversible; no provider access is authorized by this document.
+**Decision:** sequence implementation from pure domain behavior through deterministic fake and JSON contracts before considering either provider. Each slice remains independently reviewable and reversible; no provider access or implementation is authorized by this document.
 
 ## Ordered slices
 
-### 1. Establish domain value objects
+### 1. Domain core
 
-- **Objective:** Implement immutable representations for `ProviderStatus`, `QuotaWindow`, `ProviderSnapshot`, `UsageSnapshot`, source metadata, and availability states.
-- **Out of scope:** Provider adapters, persistence, transport, commands, UI, CLI, and configuration.
-- **Tests:** Construct valid and invalid values; verify missing values cannot become numeric zero.
-- **Acceptance criterion:** All four conceptual model types can represent known and absent values without ambiguity.
-- **Risks:** Premature serialization choices could constrain later integrations.
+- **Purpose/description:** Implement the domain models, window and status semantics, percentage guards, and global aggregation with explicit exclusions.
+- **Points to address:** Model `ProviderStatus`, `QuotaWindow`, `ProviderSnapshot`, `UsageSnapshot`, source metadata, absence states, freshness, and aggregate inclusion/exclusion reasons. Preserve the invariant that commercial quota, technical rate limits, token usage, balances, and percentages are distinct and cannot be conflated.
+- **Out of scope:** Providers, transport, commands, local files, serialization, cache, CLI, UI, and configuration.
+- **Tests:** Construct valid and invalid models; cover absent values, compatible percentage derivation, incompatible kinds/scopes/windows, stale observations, and every aggregate exclusion rule.
+- **Acceptance criterion:** The domain represents known and absent evidence unambiguously; a technical rate limit cannot populate commercial-quota data, and any excluded requested provider makes an aggregate `partial`.
+- **Risks:** Premature convenience fields could hide incompatible provider semantics or turn absence into numeric zero.
 
-### 2. Encode metric and window separation
+### 2. Provider foundation
 
-- **Objective:** Add explicit classifications for commercial quota, technical rate limit, token use, balance, percentage, and reset semantics.
-- **Out of scope:** Reading provider data or converting provider-specific values.
-- **Tests:** Verify incompatible kinds, scopes, and windows cannot be combined.
-- **Acceptance criterion:** A technical rate limit cannot populate a commercial-quota field.
-- **Risks:** Provider terminology may be inconsistent and must remain adapter-local.
+- **Purpose/description:** Establish typed errors, the provider protocol, injected side-effect ports, deterministic fakes, and offline contract tests.
+- **Points to address:** Define safe error and redaction rules; inject narrow HTTP, command, filesystem, clock, and timeout-policy dependencies; keep authorization explicit; provide fake providers and fixed-clock fixtures.
+- **Out of scope:** Concrete provider strategies, real I/O, authentication discovery, provider selection, and persistence.
+- **Tests:** Run provider-contract scenarios entirely with fakes for complete, partial, unauthorized, unsupported, malformed, timeout, and technical-rate-limited outcomes; assert no raw credentials or payloads escape diagnostics.
+- **Acceptance criterion:** Contract tests are deterministic and offline, and a reader returns only validated snapshots or typed, redacted errors.
+- **Risks:** Ports can become too broad by mirroring third-party clients; broad diagnostics can bypass redaction.
 
-### 3. Add percentage derivation guards
+### 3. Output contract
 
-- **Objective:** Define the pure calculation policy for used/remaining percentages.
-- **Out of scope:** Display formatting and any provider retrieval.
-- **Tests:** Cover compatible totals, zero denominators, mismatched windows, missing values, and stale observations.
-- **Acceptance criterion:** Percentages exist only for compatible known numerator and denominator values; absent data is never `0%`.
-- **Risks:** Consumers may expect a single cross-provider percentage where none is meaningful.
+- **Purpose/description:** Define JSON serialization as the stable consumer boundary and prove compatibility using fake-provider snapshots.
+- **Points to address:** Serialize status, absence reasons, metric kind, window/reset semantics, source metadata, aggregate exclusions, and freshness without inventing numeric values.
+- **Out of scope:** CLI presentation, YASB UI, real providers, persistent storage, and a public network API.
+- **Tests:** Use fakes to verify JSON for available, partial, stale, unavailable, unauthorized, invalid, and technical-rate-limited snapshots; retain the distinction among quota, rate limits, token usage, balances, and derived percentages.
+- **Acceptance criterion:** A consumer can distinguish known, partial, stale, unavailable, and error states from JSON without provider internals or ambiguous zero values.
+- **Risks:** Serialization can become an accidental public API; version compatibility deliberately and do not flatten incompatible metrics.
 
-### 4. Add aggregation with exclusions
+### 4. Codex provider
 
-- **Objective:** Implement global aggregation that returns included providers and explicit exclusion reasons.
-- **Out of scope:** Polling, scheduling, caching, and UI summaries.
-- **Tests:** Cover every exclusion rule in the domain model, including stale and incompatible measurements.
-- **Acceptance criterion:** Any excluded requested provider makes the aggregate `partial`, without coercing incompatible values.
-- **Risks:** Aggregation can hide essential provider differences if source metadata is discarded.
+- **Purpose/description:** Evaluate one bounded initial Codex observation strategy behind the established provider and output contracts, with a strict source and authorization boundary.
+- **Points to address:** Limit discovery to one strategy, use injected timeout and redaction boundaries, and create fixture tests for valid, partial, unauthorized, malformed, timeout, and safe-error outcomes. Any dashboard- or client-derived machine interface is non-public, undocumented, and reverse-engineered where applicable; it is not an official stable API.
+- **Out of scope:** Implementation, official-API claims, local credential/cookie/session discovery, provider fallback strategies, polling, persistence, and UI.
+- **Tests:** Specify offline fixtures only; no live calls, accounts, local secrets, or authenticated browser state.
+- **Acceptance criterion:** The strategy has a documented evidence boundary and can be rejected safely when no stable, authorized, evidence-backed source is available; it never maps API technical rate limits into commercial Codex quota.
+- **Risks:** The source can change without notice, authorization behavior can be fragile, and reverse-engineered assumptions can become invalid. Stop rather than infer values.
 
-### 5. Define typed errors and safe diagnostics
+### 5. OpenCode Go provider
 
-- **Objective:** Implement the contract's error taxonomy and redaction-safe diagnostic representation.
-- **Out of scope:** Actual HTTP, command, or file execution.
-- **Tests:** Assert each error kind's retryability and that diagnostic fields reject unsafe raw payloads.
-- **Acceptance criterion:** Error results distinguish authorization, absence, parsing, transport, command, and throttling outcomes without sensitive material.
-- **Risks:** Overly broad diagnostic fields could later bypass redaction.
+- **Purpose/description:** Keep OpenCode Go as a separate, explicit opt-in investigation for a fragile local reverse-engineered dashboard/session approach.
+- **Points to address:** Isolate it behind its own provider identifier and authorization boundary; require safe degradation; never persist, expose, log, or discover cookies or sessions; use only redacted fixture shapes for contract planning.
+- **Out of scope:** Implementation, default enablement, cookie/session persistence or exposure, local-authentication discovery, upstream-provider attribution, polling, and UI.
+- **Tests:** Specify offline fixtures for opt-in unavailable, unauthorized, malformed, expired-session, timeout, and partial outcomes; prove no session material enters snapshots, errors, or JSON.
+- **Acceptance criterion:** Without a safe user-authorized source, the provider yields an explicit unavailable or unauthorized result and does not fabricate account data.
+- **Risks:** This approach is local, fragile, non-public, undocumented, and reverse-engineered; it can break with dashboard or session changes and has elevated privacy risk.
 
-### 6. Introduce protocols and deterministic fakes
+### 6. CLI status
 
-- **Objective:** Add `Protocol` boundaries for provider readers, HTTP clients, command runners, filesystems, and clocks, plus test fakes.
-- **Out of scope:** Concrete provider selection and production side effects.
-- **Tests:** Prove a reader can be exercised entirely with fixed fake dependencies and a fixed clock.
-- **Acceptance criterion:** Contract tests run offline and do not depend on platform state.
-- **Risks:** Boundary interfaces may become too broad if they mirror third-party libraries.
+- **Purpose/description:** Present normal, partial, stale, unavailable, and error snapshots safely to a command-line consumer after the JSON contract exists.
+- **Points to address:** Render status and absence reasons faithfully, preserve metric and window labels, make stale data visible, and avoid exposing unsafe diagnostics or credentials.
+- **Out of scope:** YASB UI, graphical interfaces, provider acquisition, background polling, persistence, and configuration workflows.
+- **Tests:** Render JSON-contract fixtures for each status class, including incompatible metrics and redacted errors; assert stale and unavailable are not displayed as normal or zero.
+- **Acceptance criterion:** CLI output lets a user distinguish normal, partial, stale, unavailable, and error snapshots without conflating measurement categories.
+- **Risks:** Presentation shortcuts can conceal freshness or transform absence into apparent zero usage.
 
-### 7. Add static capability metadata
+### 7. In-memory cache
 
-- **Objective:** Represent research-backed provider capability classifications separately from account snapshots.
-- **Out of scope:** Treating public plan tables as account usage or implementing source acquisition.
-- **Tests:** Verify Codex and OpenCode Go capability records preserve `conditional`, `unavailable`, and `requires more research` conclusions.
-- **Acceptance criterion:** Unsupported metrics remain explicitly unavailable.
-- **Risks:** Public documentation changes; records require dated source references.
+- **Purpose/description:** Add an in-memory cache with explicit TTL, freshness, invalidation, and safe-degradation behavior.
+- **Points to address:** Use an injected clock; distinguish fresh from stale entries; invalidate deterministically; return stale, unavailable, or typed error states rather than fabricate a refreshed observation.
+- **Out of scope:** Disk or database persistence, shared/distributed caches, background refresh workers, provider implementation, and cache recovery across process restarts.
+- **Tests:** Cover TTL boundaries, fixed-clock freshness transitions, invalidation, cache misses, provider errors, and stale fallback without persistence.
+- **Acceptance criterion:** Cache behavior is deterministic, does not survive process lifetime, and never converts unavailable, expired, or failed retrieval into a current known value.
+- **Risks:** Cached values can be mistaken for live data unless freshness remains visible; invalidation bugs can retain stale account observations.
 
-### 8. Prototype one approved read-only adapter
+## Provider sequencing rationale
 
-- **Objective:** After separate source approval, implement one narrowly scoped adapter using one injected boundary.
-- **Out of scope:** Multi-provider polling, local authentication discovery, caching, CLI, and UI.
-- **Tests:** Fixture-driven complete, partial, unauthorized, malformed, and rate-limited outcomes.
-- **Acceptance criterion:** The adapter produces only validated snapshots or typed safe errors in offline tests.
-- **Risks:** Public research may not establish a reliable account-observation source; stop rather than infer.
-
-### 9. Add composition and freshness policy
-
-- **Objective:** Wire approved readers through an explicit composition root and apply caller-provided freshness rules.
-- **Out of scope:** Background workers, persistence, user interfaces, and automatic retry loops.
-- **Tests:** Verify configured readers receive injected dependencies and stale snapshots are excluded from aggregates.
-- **Acceptance criterion:** Composition introduces no hidden I/O and freshness is deterministic under a fixed clock.
-- **Risks:** A composition root can accidentally couple provider configuration to domain models.
-
-### 10. Add consumer-facing projection only after evidence
-
-- **Objective:** Define a stable, sanitized projection for a future library consumer after provider evidence and contract tests exist.
-- **Out of scope:** CLI, UI, YASB integration, daemon, cache, publishing, and any unauthorised provider feature.
-- **Tests:** Verify projections preserve absence, partial state, metric kind, reset semantics, and aggregate exclusions.
-- **Acceptance criterion:** A consumer can distinguish unsupported, unauthorized, partial, and known data without inspecting provider internals.
-- **Risks:** A consumer projection can prematurely become public API; version deliberately.
+Codex and OpenCode Go remain separate because they are distinct products with different evidence, authorization, privacy, and failure characteristics. Combining them would invite unsupported attribution of one product's limits or sessions to the other. Both provider slices follow fake-provider and JSON compatibility contracts so that any future source work is bounded by deterministic behavior, redaction, absence semantics, and safe consumer output before fragile provider-specific assumptions are considered.
 
 ## Review units and rollback boundaries
 
