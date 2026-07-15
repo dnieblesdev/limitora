@@ -76,6 +76,7 @@ An adapter may support only one category. Provider selection belongs in a compos
 | Command boundary | Direct process invocation | Makes offline tests platform-dependent. | Inject a command-runner protocol. |
 | File boundary | Direct filesystem access | Makes absence and malformed-file tests harder to control. | Inject a filesystem protocol. |
 | Time boundary | Direct clock access | Makes freshness and reset tests nondeterministic. | Inject a clock protocol. |
+| Timeout policy | Adapter-local defaults | Produces inconsistent cancellation and retry behavior. | Inject a bounded timeout policy; each approved operation must receive an explicit deadline. |
 
 ## Injection boundaries
 
@@ -85,6 +86,7 @@ The composition root supplies adapters with narrow dependencies:
 - **Command runner:** accepts an approved command specification and returns exit status plus redacted output classification; it never exposes the ambient environment wholesale.
 - **Filesystem:** reads only explicitly configured, allowlisted paths and reports absence distinctly from invalid content.
 - **Clock:** supplies an instant for observation and freshness evaluation.
+- **Timeout policy:** supplies a bounded deadline or duration for each approved HTTP, CLI, or local-file operation. Expiry maps to a retryable `transport` or `command_failed` error as appropriate; it never yields a fabricated snapshot.
 
 No adapter discovers local authentication artifacts. Authorization policy is explicit in `StatusRequest`, and lack of authorization yields `unauthorized` or `not_authorized`, never a fabricated measurement.
 
