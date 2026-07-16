@@ -26,9 +26,9 @@
 
 ### 3. Application service / orchestration
 
-- **Purpose/description:** Create a central `StatusService` or `UsageOrchestrator` that selects providers, may coordinate concurrency, normalizes partial outcomes, applies error and degradation policy, and creates global snapshots.
+- **Purpose/description:** Create a central `StatusService` or `UsageOrchestrator` that operates on explicitly supplied provider contracts, may coordinate concurrency, normalizes partial outcomes, applies error and degradation policy, and creates global snapshots.
 - **Points to address:** Define provider-selection inputs, isolation between provider failures, deterministic outcome normalization, concurrency boundaries, and aggregation handoff. The CLI must not own this logic.
-- **Out of scope:** Transport/parser internals, JSON rendering, command-line parsing, and cache storage mechanics.
+- **Out of scope:** Concrete adapter construction, runtime configuration, provider registries, transport/parser internals, JSON rendering, command-line parsing, and cache storage mechanics. Concrete wiring belongs to the application-composition slice.
 - **Tests:** Mandatory: exercise mixed provider outcomes, selection, degradation, concurrency-safe ordering, and global snapshots using fake providers and an injected clock.
 - **Acceptance criterion:** Equivalent provider results produce the same typed global snapshot regardless of CLI or output consumer.
 - **Risks:** Orchestration can absorb provider parsing details or duplicate domain aggregation rules.
@@ -37,7 +37,7 @@
 
 - **Purpose/description:** Define a stable typed Python-facing client or service request/result contract, including provider selection and freshness policy.
 - **Points to address:** Specify supported request options, typed results and problems, lifecycle expectations, and compatibility boundaries. Do not expose provider transport, parser, session details, or JSON as the primary API.
-- **Out of scope:** JSON schema, CLI flags, adapter internals, and provider-specific authentication mechanisms.
+- **Out of scope:** JSON schema, CLI flags, adapter internals, provider-specific authentication mechanisms, concrete provider construction, and default provider selection.
 - **Tests:** Mandatory: contract-test typed request and result compatibility, provider selection, freshness policy, and sanitized problem surfaces without a CLI or serialized output.
 - **Acceptance criterion:** A Python consumer can obtain and inspect a typed result without depending on JSON or provider implementation details.
 - **Risks:** Leaking adapter details would freeze fragile integrations as public API.
@@ -46,7 +46,7 @@
 
 - **Purpose/description:** Define one bounded Codex strategy using an existing authorized authentication path, with timeout, redaction, fixtures, and a manual opt-in smoke test.
 - **Points to address:** Classify the source honestly as non-public, undocumented, or reverse-engineered where appropriate; make no stable official API claim. Bound response handling, error classification, and fixture evidence to the selected strategy.
-- **Out of scope:** Additional strategies, credential or session discovery, fallback chains, polling, persistence, default enablement, and implementation authorization.
+- **Out of scope:** Additional strategies, credential or session discovery, fallback chains, polling, persistence, default enablement, application composition, and implementation authorization.
 - **Tests:** Mandatory: use offline redacted fixtures for valid, partial, unauthorized, malformed, and timeout outcomes; define a separately manual opt-in smoke test that cannot expose secrets.
 - **Acceptance criterion:** The strategy either returns evidence-backed typed data or explicitly degrades; it never conflates technical limits with commercial Codex quota.
 - **Risks:** The source may change without notice and authorization behavior may be fragile; unknown values must not be inferred.
@@ -55,12 +55,21 @@
 
 - **Purpose/description:** Define an independent opt-in authenticated-session or dashboard adapter for OpenCode Go as a fragile, local-reverse-engineered integration.
 - **Points to address:** Require defensive parsing, response-size limits, explicit incompatible-response degradation, and strict non-exposure and non-persistence of secrets, cookies, and headers.
-- **Out of scope:** Default enablement, credential or session discovery, cookie/session persistence, upstream attribution, polling, UI, and implementation authorization.
+- **Out of scope:** Default enablement, credential or session discovery, cookie/session persistence, upstream attribution, polling, application composition, UI, and implementation authorization.
 - **Tests:** Mandatory: use offline redacted fixtures for unavailable, unauthorized, expired-session, malformed, oversized, incompatible, timeout, and partial outcomes; prove session material never enters typed results, errors, JSON, or logs.
 - **Acceptance criterion:** An incompatible or unauthorized response yields a sanitized explicit degradation and never fabricated account data.
 - **Risks:** Dashboard and session behavior are non-public, undocumented, reverse-engineered, privacy-sensitive, and likely to break.
 
-### 7. In-memory cache
+### 7. Application composition and provider activation
+
+- **Purpose/description:** Add one explicit application composition root that turns typed runtime configuration into a selected concrete provider and a ready-to-use `StatusClient`. It must consume both `CodexProvider` and the future OpenCode Go provider after their adapter slices are available.
+- **Points to address:** Define a closed provider-configuration union, provider identifiers, explicit runner/session inputs, lifecycle ownership, clock injection, and one factory such as `build_status_client(config)`. The existing CLI `client_factory` seam and other application entry points must receive clients from this composition root instead of constructing adapters themselves.
+- **Out of scope:** Provider transport/parser logic, credential or executable discovery, implicit globals, default provider selection, automatic fallback chains, rendering, cache policy, secret persistence, and multi-provider aggregation.
+- **Tests:** Mandatory: prove Codex configuration constructs and invokes only `CodexProvider`; OpenCode Go configuration constructs and invokes only its adapter; disabled or missing configuration performs no provider I/O; no provider silently falls back to the other; imports have no runtime side effects; and application/CLI boundaries can obtain a composed client using offline fake ports.
+- **Acceptance criterion:** Every implemented concrete provider is reachable through one supported application boundary and can produce a typed `StatusResult`; neither provider remains dead code, and presentation layers do not import or instantiate concrete adapters.
+- **Risks:** A composition root can degrade into a service locator, hide ambient authority, persist secrets, or couple the public API to unstable adapter details.
+
+### 8. In-memory cache
 
 - **Purpose/description:** Cache valid typed snapshots, never rendered JSON, with separate reuse TTL and maximum stale age.
 - **Points to address:** Define cache keys, invalidation, fallback policy, injected-clock boundaries, reuse eligibility, stale eligibility, and process-lifetime limits.
@@ -69,7 +78,7 @@
 - **Acceptance criterion:** The cache never presents rendered JSON or failed/expired data as fresh, and its fallback is explicit in typed freshness state.
 - **Risks:** Reuse TTL can be confused with maximum stale age, retaining account observations beyond their allowed use.
 
-### 8. Output contracts
+### 9. Output contracts
 
 - **Purpose/description:** Define versioned deterministic JSON schema and human rendering as projections of public-library results, not as the primary API.
 - **Points to address:** Specify generated, fetched, fresh, and reset timestamp meanings; stable ordering; sanitized public problems; metric and absence representation; and stdout, stderr, and exit-code behavior for future CLI consumers.
@@ -78,14 +87,27 @@
 - **Acceptance criterion:** Consumers can distinguish typed state and timestamp meanings without provider internals, while JSON remains a projection rather than the library contract.
 - **Risks:** JSON fields can accidentally become an unversioned primary API, and rendering can hide absence or freshness.
 
-### 9. CLI status
+### 10. CLI provider activation and status
 
-- **Purpose/description:** Implement a thin parser and adapter over the public library API for status, JSON, provider selection, and later cache controls.
-- **Points to address:** Map arguments to typed library requests, use output contracts for rendering and streams, and preserve sanitized public problems. It renders only: it must never execute providers, calculate global state, or apply cache policy.
-- **Out of scope:** Provider adapters, orchestration, aggregation, cache decisions, JSON-schema ownership, and UI.
-- **Tests:** Mandatory: verify argument mapping and rendering against a fake public-library client for normal, partial, stale, unavailable, and error results; assert no provider port is invoked by the CLI layer.
-- **Acceptance criterion:** The CLI is replaceable without changing provider behavior, aggregation, freshness policy, or cache policy.
-- **Risks:** Convenience logic in commands can fork policy from the public library API.
+- **Purpose/description:** Extend the existing thin `limitora status` presentation adapter so explicit runtime provider selection is converted into typed composition configuration and delegated to the application composition root.
+- **Points to address:** Map explicit provider/configuration arguments to the composition factory, preserve the injected `client_factory` test seam, select an authorization policy that requires deliberate provider activation, and use output contracts for rendering and streams. The CLI renders results; it must never instantiate `CodexProvider` or OpenCode Go directly, inspect credentials, calculate global state, or apply cache policy.
+- **Out of scope:** Provider adapter construction, transport/parser internals, credential discovery, implicit default providers, orchestration, aggregation, cache decisions, JSON-schema ownership, and UI.
+- **Tests:** Mandatory: verify Codex and OpenCode Go selections map to the correct typed composition input; missing configuration retains deterministic unconfigured behavior; provider failures remain sanitized; rendering covers normal, partial, stale, unavailable, and error results; and no concrete provider port is invoked by presentation code.
+- **Acceptance criterion:** An installed CLI invocation with explicit valid configuration can consume either concrete provider through the composition root and render its typed result; without explicit configuration it remains side-effect-free and reports unconfigured status.
+- **Risks:** Convenience logic in commands can bypass the composition root, activate authorization implicitly, or fork policy from the public library API.
+
+## Required runtime dependency path
+
+```text
+explicit runtime configuration
+        -> application composition root
+        -> CodexProvider | OpenCodeGoProvider
+        -> StatusClient -> StatusService
+        -> typed StatusResult
+        -> CLI or another presentation consumer
+```
+
+Concrete provider adapters own acquisition and validation. The composition root owns construction and selection. `StatusClient` and `StatusService` remain provider-agnostic. The CLI owns only argument mapping and presentation. A provider slice is not operationally complete until a later composition slice makes that adapter reachable through this path.
 
 ## Provider separation rationale
 
