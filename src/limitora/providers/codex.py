@@ -56,8 +56,6 @@ class CodexProvider:
             if not isinstance(plan, str) or plan.strip() != plan or plan not in _SUPPORTED_PLANS:
                 raise _MappingError(ProviderErrorKind.UNSUPPORTED)
             raw_windows = tuple(rate_limits.get(key) for key in ("primary", "secondary"))
-            if any(item is not None and not isinstance(item, dict) for item in raw_windows):
-                raise _MappingError(ProviderErrorKind.UNSUPPORTED)
             durations = [item.get("windowDurationMins") for item in raw_windows if isinstance(item, dict)]
             if len(durations) != len(set(durations)) or any(type(value) is not int or value not in _PERIODS for value in durations):
                 raise _MappingError(ProviderErrorKind.UNSUPPORTED)

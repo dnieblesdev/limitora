@@ -82,12 +82,32 @@ class CodexProviderTests(unittest.TestCase):
         provider, _ = self.provider(payload(window(300, 2, None)))
         self.assertIsNone(provider.fetch(request()).quota_windows[0].reset_at)
 
+    def test_partial_mapping_preserves_valid_primary_when_secondary_shape_is_malformed(self):
+        provider, _ = self.provider(payload(window(300, 25), secondary=[]))
+        snapshot = provider.fetch(request())
+        self.assertEqual(ProviderState.PARTIAL, snapshot.status.state)
+        self.assertEqual(1, len(snapshot.quota_windows))
+        five_hour = snapshot.quota_windows[0]
+        self.assertEqual(("five_hour", 100, 25, 75, "percentage_points"),
+                         (five_hour.period, five_hour.limit.value, five_hour.used.value,
+                          five_hour.remaining.value, five_hour.unit))
+
+    def test_partial_mapping_preserves_valid_secondary_when_primary_shape_is_malformed(self):
+        provider, _ = self.provider(payload(primary=[], secondary=window(10080, 60)))
+        snapshot = provider.fetch(request())
+        self.assertEqual(ProviderState.PARTIAL, snapshot.status.state)
+        self.assertEqual(1, len(snapshot.quota_windows))
+        weekly = snapshot.quota_windows[0]
+        self.assertEqual(("weekly", 100, 60, 40, "percentage_points"),
+                         (weekly.period, weekly.limit.value, weekly.used.value,
+                          weekly.remaining.value, weekly.unit))
+
     def test_structural_and_value_failures_are_closed_and_redacted(self):
         cases = (
             (payload(window(300, 1), planType=" unknown "), ProviderErrorKind.UNSUPPORTED),
             (payload(window(300, 1), planType="unknown"), ProviderErrorKind.UNSUPPORTED),
             (payload(window(300, 1), planType=None), ProviderErrorKind.UNSUPPORTED),
-            (payload([], window(10080, 2)), ProviderErrorKind.UNSUPPORTED),
+            (payload([]), ProviderErrorKind.UNSUPPORTED),
             (payload(window(300, 1), planType="pro "), ProviderErrorKind.UNSUPPORTED),
             (payload({"limitId": "other", "windowDurationMins": 300, "usedPercent": 1}), ProviderErrorKind.UNSUPPORTED),
             (payload(window(60, 1)), ProviderErrorKind.UNSUPPORTED),
