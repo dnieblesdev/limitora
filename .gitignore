@@ -92,3 +92,6 @@ unredacted*
 # Allow explicitly redacted artifacts
 !*.redacted.json
 !*.redacted.txt
+# Local Pi runtime state
+.atl/
+.codegraph/
