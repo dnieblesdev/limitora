@@ -18,7 +18,7 @@ dependencies = []
 # TODO: Add provider-specific extras once providers are implemented.
 
 [project.scripts]
-# TODO: Add CLI entry point once limitora.cli is implemented.
+limitora = "limitora.cli:console_main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

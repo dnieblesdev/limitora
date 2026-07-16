@@ -14,7 +14,7 @@ Local scripting tools that call LLM providers often end up tied to a specific ed
 ┌─────────────────────────────────────┐
 │           consumers / CLI           │
 ├─────────────────────────────────────┤
-│  limitora.cli (future)              │
+│  limitora.cli                       │
 │  limitora.core                      │
 │  limitora.models                    │
 ├─────────────────────────────────────┤
@@ -32,7 +32,7 @@ Local scripting tools that call LLM providers often end up tied to a specific ed
 - `models` will define stable data contracts.
 - `providers` will contain one adapter per LLM service.
 - `cache` will hold optional, local, redact-first persistence helpers.
-- `cli` will be a thin command-line interface that emits JSON.
+- `cli` provides the fixed human-readable `limitora status` presentation boundary.
 
 Limitora never imports YASB, PyQt, Waybar, or any UI integration.
 
@@ -49,9 +49,9 @@ Limitora never imports YASB, PyQt, Waybar, or any UI integration.
 
 The public API is not defined yet. The first stable surface will live in `limitora.core` and `limitora.models`; provider modules will be imported directly only when a consumer explicitly chooses a backend.
 
-## Planned CLI / JSON output
+## CLI status
 
-A future `limitora` CLI will accept subcommands and emit structured JSON. No CLI logic exists in this scaffold.
+`limitora status` renders human-readable typed status evidence only. It has no JSON mode or provider/configuration options; until an application injects a composed client, the installed command deterministically reports that no provider is configured (exit code 4). Live provider composition and JSON are deferred.
 
 ## Security and privacy
 
@@ -62,7 +62,7 @@ Never store tokens, cookies, sessions, credentials, or provider cache data unred
 1. Finalize core models and provider contract.
 2. Implement Codex and OpenCode Go providers.
 3. Add rate-limiting helpers.
-4. Add the JSON CLI.
+4. Add live provider composition or a separate machine-readable contract.
 5. Evaluate Claude and Gemini providers.
 
 ## Future relation to yasb-limitora
