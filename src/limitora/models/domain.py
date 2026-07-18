@@ -103,6 +103,9 @@ def _require_identity(value: str, name: str) -> None:
         raise ValueError(f"{name} must be a non-empty trimmed string")
 
 
+_PLANLESS_COMMERCIAL_SOURCE = "opencode-go-dashboard"
+
+
 @dataclass(frozen=True)
 class ProviderStatus:
     provider_id: ProviderId
@@ -137,7 +140,11 @@ class QuotaWindow:
         if self.availability is ValueAvailability.KNOWN:
             if not values:
                 raise ValueError("known window requires a quantity")
-            if self.kind is WindowKind.COMMERCIAL_QUOTA and self.plan_id is None:
+            if (
+                self.kind is WindowKind.COMMERCIAL_QUOTA
+                and self.plan_id is None
+                and self.source.reference != _PLANLESS_COMMERCIAL_SOURCE
+            ):
                 raise ValueError("known commercial window requires a plan identifier")
             expected = MetricKind(self.kind.value) if self.kind is not WindowKind.OTHER else None
             if expected is not None and any(value.metric is not expected for value in values):

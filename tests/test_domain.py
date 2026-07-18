@@ -24,6 +24,7 @@ from limitora.models import (
 
 NOW = datetime(2026, 7, 14, 12, tzinfo=timezone.utc)
 SOURCE = SourceMetadata("provider-api")
+OPENCODE_GO_SOURCE = SourceMetadata("opencode-go-dashboard")
 
 
 def commercial_window(
@@ -68,6 +69,38 @@ def snapshot(
 
 
 class DomainModelTests(unittest.TestCase):
+    def test_known_planless_opencode_go_commercial_window_is_allowed(self) -> None:
+        window = QuotaWindow(
+            kind=WindowKind.COMMERCIAL_QUOTA,
+            scope="account",
+            period="five_hour",
+            plan_id=None,
+            availability=ValueAvailability.KNOWN,
+            source=OPENCODE_GO_SOURCE,
+            limit=Quantity(Decimal("100"), MetricKind.COMMERCIAL_QUOTA, "percentage_points"),
+            used=Quantity(Decimal("25"), MetricKind.COMMERCIAL_QUOTA, "percentage_points"),
+            remaining=Quantity(Decimal("75"), MetricKind.COMMERCIAL_QUOTA, "percentage_points"),
+        )
+
+        self.assertIsNone(window.plan_id)
+        self.assertEqual(Percentage(Decimal("75")), window.remaining_percentage)
+
+    def test_planless_commercial_windows_remain_restricted_to_opencode_go_source(self) -> None:
+        with self.assertRaises(ValueError):
+            commercial_window(plan_id=None)
+
+        with self.assertRaises(ValueError):
+            QuotaWindow(
+                kind=WindowKind.COMMERCIAL_QUOTA,
+                scope="account",
+                period="five_hour",
+                plan_id=None,
+                availability=ValueAvailability.KNOWN,
+                source=SourceMetadata("opencode-go-dashboard-copy"),
+                limit=Quantity(Decimal("100"), MetricKind.COMMERCIAL_QUOTA, "percentage_points"),
+                remaining=Quantity(Decimal("75"), MetricKind.COMMERCIAL_QUOTA, "percentage_points"),
+            )
+
     def test_constructs_known_commercial_window_and_derives_percentages(self) -> None:
         window = QuotaWindow(
             kind=WindowKind.COMMERCIAL_QUOTA,

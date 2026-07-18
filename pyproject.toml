@@ -15,7 +15,7 @@ authors = [
 dependencies = []
 
 [project.optional-dependencies]
-# TODO: Add provider-specific extras once providers are implemented.
+opencode-go = ["httpx>=0.27,<1"]
 
 [project.scripts]
 limitora = "limitora.cli:console_main"

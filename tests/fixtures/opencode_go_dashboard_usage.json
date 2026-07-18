@@ -1,0 +1,15 @@
+{
+  "rollingUsage": {
+    "usagePercent": 101.001,
+    "resetInSec": 100001
+  },
+  "weeklyUsage": {
+    "usagePercent": 202.002,
+    "resetInSec": 200002
+  },
+  "monthlyUsage": {
+    "usagePercent": 303.003,
+    "resetInSec": 300003
+  },
+  "subscriptionPlan": null
+}
