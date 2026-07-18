@@ -325,8 +325,6 @@ def aggregate_remaining_percentages(
     _require_identity(unit, "unit")
     if plan_id is not None:
         _require_identity(plan_id, "plan_id")
-    if kind is WindowKind.COMMERCIAL_QUOTA and plan_id is None:
-        raise ValueError("commercial aggregation requires a plan identifier")
     _require_aware(now, "now")
     if maximum_age < timedelta(0):
         raise ValueError("maximum age cannot be negative")
@@ -356,7 +354,15 @@ def aggregate_remaining_percentages(
         if window.availability is not ValueAvailability.KNOWN:
             exclusions.append(AggregateExclusion(snapshot.provider_id, ExclusionReason.ABSENT))
             continue
-        if window.plan_id != plan_id or window.unit != unit:
+        if (
+            window.plan_id != plan_id
+            or window.unit != unit
+            or (
+                kind is WindowKind.COMMERCIAL_QUOTA
+                and plan_id is None
+                and window.source.reference != _PLANLESS_COMMERCIAL_SOURCE
+            )
+        ):
             exclusions.append(
                 AggregateExclusion(snapshot.provider_id, ExclusionReason.INCOMPATIBLE_COMPARABILITY)
             )

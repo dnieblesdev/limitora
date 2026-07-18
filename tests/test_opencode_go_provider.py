@@ -54,6 +54,14 @@ class OpenCodeGoProviderTests(unittest.TestCase):
             self.provider(HttpResponse(200, b'{"weeklyUsage":{}}')).fetch(self.request())
         self.assertEqual(ProviderErrorKind.PARSE_FAILED, raised.exception.kind)
 
+    def test_html_login_and_malformed_bodies_are_safe_parse_failures(self):
+        for body in (b"<html><body>login</body></html>", b"not-json"):
+            with self.subTest(body=body):
+                with self.assertRaises(ProviderError) as raised:
+                    self.provider(HttpResponse(200, body)).fetch(self.request())
+                self.assertEqual(ProviderErrorKind.PARSE_FAILED, raised.exception.kind)
+                self.assertNotIn("login", raised.exception.safe_message)
+
     def test_status_mapping_is_typed_and_body_is_not_exposed(self):
         for status, kind in ((301, ProviderErrorKind.UNSUPPORTED), (401, ProviderErrorKind.UNAUTHORIZED), (403, ProviderErrorKind.UNAUTHORIZED), (418, ProviderErrorKind.UNSUPPORTED), (429, ProviderErrorKind.RATE_LIMITED), (503, ProviderErrorKind.SOURCE_UNAVAILABLE)):
             with self.subTest(status=status):

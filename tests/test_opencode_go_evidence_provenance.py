@@ -1,10 +1,15 @@
 """Keep synthetic shape evidence separate from semantic corroboration."""
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import tomllib
 import unittest
 
+from limitora.models import MetricKind
+from limitora.providers import AuthorizationPolicy, ProviderRequest
+from limitora.providers._opencode_go import OpenCodeGoConfig, OpenCodeGoProvider
+from limitora.providers.ports import HttpResponse
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "opencode_go_dashboard_usage.json"
 
@@ -65,6 +70,34 @@ class OpenCodeGoEvidenceProvenanceTests(unittest.TestCase):
             tuple(payload), MAPPING_POLICY["accepted_windows"],
             "fixture keys establish shape, not the mapping policy",
         )
+
+    def test_production_provider_mapping_corrobates_the_declared_policy(self) -> None:
+        fixture = json.loads(FIXTURE_PATH.read_text())
+        payload = {
+            name: {"usagePercent": index * 25, "resetInSec": index * 10}
+            for index, name in enumerate(fixture)
+            if name in MAPPING_POLICY["accepted_windows"]
+        }
+
+        class StubTransport:
+            def fetch(self):
+                return HttpResponse(200, json.dumps(payload).encode())
+
+        fetched_at = datetime(2026, 7, 18, 12, tzinfo=timezone.utc)
+        provider = OpenCodeGoProvider(
+            OpenCodeGoConfig("workspace", "opaque", "https://opencode.ai", timedelta(seconds=10)),
+            StubTransport(),
+            clock=lambda: fetched_at,
+        )
+        snapshot = provider.fetch(ProviderRequest(
+            frozenset({MetricKind.COMMERCIAL_QUOTA}),
+            AuthorizationPolicy.ALLOW_AUTHORIZED_SOURCE,
+        ))
+
+        self.assertEqual(3, len(snapshot.quota_windows))
+        self.assertTrue(all(window.plan_id is MAPPING_POLICY["plan_id"] for window in snapshot.quota_windows))
+        self.assertEqual(("five_hour", "weekly", "monthly"), tuple(window.period for window in snapshot.quota_windows))
+        self.assertEqual((0, 25, 50), tuple(window.used.value for window in snapshot.quota_windows))
 
     def test_httpx_is_scoped_to_the_opencode_go_runtime_extra(self) -> None:
         project = tomllib.loads((FIXTURE_PATH.parents[2] / "pyproject.toml").read_text())

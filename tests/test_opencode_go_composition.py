@@ -4,8 +4,9 @@ from datetime import datetime, timedelta, timezone
 from io import StringIO
 
 import limitora
-from limitora import AuthorizationPolicy, FreshnessPolicy, MetricKind, StatusClient, StatusRequest
+from limitora import AuthorizationPolicy, Freshness, FreshnessPolicy, MetricKind, StatusClient, StatusRequest, StatusSnapshotResult
 from limitora.cli import main
+from limitora.cli import _render_snapshot
 from limitora.models import ProviderState
 from limitora.providers import HttpPort, ProviderReader
 from limitora.providers import _build_opencode_go_provider
@@ -65,6 +66,16 @@ class OpenCodeGoCompositionTests(unittest.TestCase):
 
         self.assertEqual(5, code)
         self.assertEqual(("", True), (output.getvalue(), "KIND: unauthorized" in errors.getvalue()))
+
+    def test_public_presentation_keeps_composed_planless_identity_unfabricated(self):
+        provider, _ = self.provider(HttpResponse(200, b'{"rollingUsage":{"usagePercent":20,"resetInSec":10}}'))
+        snapshot = provider.fetch(REQUEST.to_provider_request())
+
+        rendered = _render_snapshot(StatusSnapshotResult(snapshot, Freshness.FRESH))
+
+        self.assertIn("PROVIDER: opencode-go", rendered)
+        self.assertIn("PLAN_ID: unavailable", rendered)
+        self.assertNotIn("PLAN_ID: free", rendered)
 
     def test_private_provider_modules_have_no_runtime_or_secret_discovery_boundary(self):
         from pathlib import Path

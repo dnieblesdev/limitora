@@ -193,6 +193,31 @@ class DomainModelTests(unittest.TestCase):
         self.assertEqual((ProviderId("codex"), ProviderId("openai")), result.included_provider_ids)
         self.assertFalse(result.partial)
 
+    def test_aggregate_preserves_authorized_planless_opencode_go_identity(self) -> None:
+        result = aggregate_remaining_percentages(
+            (snapshot("opencode-go", QuotaWindow(
+                kind=WindowKind.COMMERCIAL_QUOTA,
+                scope="account",
+                period="monthly",
+                plan_id=None,
+                availability=ValueAvailability.KNOWN,
+                source=OPENCODE_GO_SOURCE,
+                limit=Quantity(Decimal("100"), MetricKind.COMMERCIAL_QUOTA, "percentage_points"),
+                remaining=Quantity(Decimal("75"), MetricKind.COMMERCIAL_QUOTA, "percentage_points"),
+            )),),
+            kind=WindowKind.COMMERCIAL_QUOTA,
+            scope="account",
+            period="monthly",
+            plan_id=None,
+            unit="percentage_points",
+            now=NOW,
+            maximum_age=timedelta(minutes=5),
+        )
+
+        self.assertEqual(Percentage(Decimal("75")), result.remaining_percentage)
+        self.assertEqual((ProviderId("opencode-go"),), result.included_provider_ids)
+        self.assertIsNone(result.plan_id)
+
     def test_aggregate_excludes_absent_status_stale_and_incompatible_data(self) -> None:
         result = aggregate_remaining_percentages(
             (
