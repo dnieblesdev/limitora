@@ -1,5 +1,7 @@
 """Provider contracts and deterministic test implementations."""
 
+from datetime import timedelta
+
 from .contract import (
     AuthorizationPolicy,
     ProviderDetection,
@@ -23,6 +25,24 @@ from .ports import (
     PortFailureKind,
     PortKind,
 )
+
+
+def _build_opencode_go_provider(
+    workspace_id: str,
+    auth_cookie: str,
+    *,
+    endpoint: str = "https://opencode.ai",
+    timeout: timedelta = timedelta(seconds=10),
+    clock=None,
+    transport=None,
+):
+    """Build the private OpenCode Go adapter without widening provider contracts."""
+    from ._opencode_go import OpenCodeGoConfig, OpenCodeGoProvider
+    from ._opencode_go_httpx import _HttpxOpenCodeGoTransport
+
+    config = OpenCodeGoConfig(workspace_id, auth_cookie, endpoint, timeout)
+    selected_transport = _HttpxOpenCodeGoTransport(config) if transport is None else transport
+    return OpenCodeGoProvider(config, selected_transport, clock=clock)
 
 __all__ = [
     "AuthorizationPolicy",

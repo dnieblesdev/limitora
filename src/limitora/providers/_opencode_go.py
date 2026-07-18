@@ -14,7 +14,7 @@ from limitora.models import (
     Quantity, QuotaWindow, SourceMetadata, ValueAvailability, WindowKind,
 )
 
-from .contract import ProviderDetection, ProviderError, ProviderErrorKind, ProviderReader, ProviderRequest, map_port_failure
+from .contract import AuthorizationPolicy, ProviderDetection, ProviderError, ProviderErrorKind, ProviderReader, ProviderRequest, map_port_failure
 from .ports import HttpResponse, PortFailure, PortKind
 
 
@@ -48,6 +48,8 @@ class OpenCodeGoProvider(ProviderReader):
         return ProviderDetection(self.PROVIDER_ID, True, self._clock())
 
     def fetch(self, request: ProviderRequest) -> ProviderSnapshot:
+        if request.authorization_policy is AuthorizationPolicy.DENY_AUTHORIZED_SOURCE:
+            raise ProviderError(ProviderErrorKind.UNAUTHORIZED, self.PROVIDER_ID, "OpenCode Go authorization denied", retryable=False)
         if MetricKind.COMMERCIAL_QUOTA not in request.requested_metrics:
             raise ProviderError(ProviderErrorKind.UNSUPPORTED, self.PROVIDER_ID, "requested metric is unsupported", retryable=False)
         result = self._transport.fetch()

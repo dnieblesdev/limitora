@@ -14,13 +14,21 @@ NOW = datetime(2026, 7, 18, 12, tzinfo=timezone.utc)
 
 class StubTransport:
     def __init__(self, result):
-        self.result = result
+        self.result, self.calls = result, 0
 
     def fetch(self):
+        self.calls += 1
         return self.result
 class OpenCodeGoProviderTests(unittest.TestCase):
     def request(self):
         return ProviderRequest(frozenset({MetricKind.COMMERCIAL_QUOTA}), AuthorizationPolicy.ALLOW_AUTHORIZED_SOURCE)
+
+    def test_denied_authorized_source_fails_before_transport(self):
+        provider = self.provider(HttpResponse(200, b'{}'))
+        with self.assertRaises(ProviderError) as raised:
+            provider.fetch(ProviderRequest(frozenset({MetricKind.COMMERCIAL_QUOTA}), AuthorizationPolicy.DENY_AUTHORIZED_SOURCE))
+        self.assertEqual(ProviderErrorKind.UNAUTHORIZED, raised.exception.kind)
+        self.assertEqual(0, provider._transport.calls)
 
     def provider(self, result):
         config = OpenCodeGoConfig("workspace", "secret", "https://opencode.ai", timedelta(seconds=10))
