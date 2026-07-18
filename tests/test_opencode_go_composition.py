@@ -1,16 +1,14 @@
-import inspect
 import unittest
 from datetime import datetime, timedelta, timezone
 from io import StringIO
 
 import limitora
-from limitora import AuthorizationPolicy, Freshness, FreshnessPolicy, MetricKind, StatusClient, StatusRequest, StatusSnapshotResult
+from limitora import AuthorizationPolicy, Freshness, FreshnessPolicy, MetricKind, StatusRequest, StatusSnapshotResult
 from limitora.cli import main
 from limitora.cli import _render_snapshot
 from limitora.models import ProviderState
-from limitora.providers import HttpPort, ProviderReader
-from limitora.providers import _build_opencode_go_provider
 from limitora.providers.ports import HttpResponse
+from limitora.composition import OpenCodeGoConfig, OpenCodeGoDependencies, build_status_client
 
 
 NOW = datetime(2026, 7, 18, 12, tzinfo=timezone.utc)
@@ -31,35 +29,31 @@ class StubTransport:
         return self.result
 
 
+class FixedClock:
+    def now(self):
+        return NOW
+
+
 class OpenCodeGoCompositionTests(unittest.TestCase):
     def provider(self, result):
         transport = StubTransport(result)
-        provider = _build_opencode_go_provider(
-            "workspace", "opaque-cookie", transport=transport, clock=lambda: NOW
+        client = build_status_client(
+            OpenCodeGoConfig("workspace", "opaque-cookie"),
+            OpenCodeGoDependencies(FixedClock(), lambda config: transport),
         )
-        return provider, transport
+        return client, transport
 
-    def test_private_composition_returns_contract_provider_without_public_private_exports(self):
-        provider, transport = self.provider(HttpResponse(200, b'{"rollingUsage":{"usagePercent":20,"resetInSec":10}}'))
+    def test_public_composition_returns_ready_client_without_public_private_exports(self):
+        client, transport = self.provider(HttpResponse(200, b'{"rollingUsage":{"usagePercent":20,"resetInSec":10}}'))
 
-        self.assertIsInstance(provider, ProviderReader)
-        self.assertEqual("opencode-go", provider.provider_id.value)
-        result = provider.fetch(REQUEST.to_provider_request())
-        self.assertEqual(ProviderState.PARTIAL, result.status.state)
+        result = client.read_status(REQUEST)
+        self.assertEqual(ProviderState.PARTIAL, result.snapshot.status.state)
         self.assertEqual(1, transport.calls)
         self.assertNotIn("OpenCodeGoProvider", limitora.providers.__all__)
         self.assertNotIn("OpenCodeGoConfig", limitora.providers.__all__)
-        signature = inspect.signature(HttpPort.send)
-        self.assertEqual(("self", "request"), tuple(signature.parameters))
-        self.assertEqual("HttpResponse", signature.return_annotation)
 
     def test_composed_provider_reaches_public_client_and_cli_with_planless_identity(self):
-        provider, _ = self.provider(HttpResponse(200, b'{"rollingUsage":{"usagePercent":20,"resetInSec":10}}'))
-        class FixedClock:
-            def now(self):
-                return NOW
-
-        client = StatusClient(provider, clock=FixedClock())
+        client, _ = self.provider(HttpResponse(200, b'{"rollingUsage":{"usagePercent":20,"resetInSec":10}}'))
         output, errors = StringIO(), StringIO()
 
         code = main(["status"], client_factory=lambda: client, stdout=output, stderr=errors)
@@ -68,8 +62,8 @@ class OpenCodeGoCompositionTests(unittest.TestCase):
         self.assertEqual(("", True), (output.getvalue(), "KIND: unauthorized" in errors.getvalue()))
 
     def test_public_presentation_keeps_composed_planless_identity_unfabricated(self):
-        provider, _ = self.provider(HttpResponse(200, b'{"rollingUsage":{"usagePercent":20,"resetInSec":10}}'))
-        snapshot = provider.fetch(REQUEST.to_provider_request())
+        client, _ = self.provider(HttpResponse(200, b'{"rollingUsage":{"usagePercent":20,"resetInSec":10}}'))
+        snapshot = client.read_status(REQUEST).snapshot
 
         rendered = _render_snapshot(StatusSnapshotResult(snapshot, Freshness.FRESH))
 
