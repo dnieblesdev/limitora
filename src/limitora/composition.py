@@ -8,7 +8,9 @@ from os.path import isabs
 from enum import Enum
 from typing import Callable, Literal, Protocol, TypeAlias
 
-from .api import Clock, StatusClient
+from .api import StatusClient
+from .providers.cache import CachedProviderReader, ProviderCachePolicy
+from .providers.ports import Clock
 from .providers._opencode_go import OpenCodeGoConfig as AdapterOpenCodeGoConfig, OpenCodeGoProvider
 from .providers.codex import CodexProvider
 @dataclass(frozen=True)
@@ -88,12 +90,15 @@ def build_status_client(
     dependencies: ProviderDependencies | None,
     *,
     enabled: bool = True,
+    cache_policy: ProviderCachePolicy | None = None,
     ) -> StatusClient:
     """Build exactly one selected provider from explicit validated inputs."""
     if not enabled:
         _fail(CompositionErrorKind.DISABLED)
     if config is None or dependencies is None:
         _fail(CompositionErrorKind.MISSING)
+    if cache_policy is not None and type(cache_policy) is not ProviderCachePolicy:
+        _fail(CompositionErrorKind.INVALID)
     if type(config) is CodexJsonlConfig:
         if not _valid_codex(config):
             _fail(CompositionErrorKind.INVALID)
@@ -105,7 +110,7 @@ def build_status_client(
         if session is None:
             _fail(CompositionErrorKind.INVALID)
         provider = CodexProvider(config.runner, dependencies.clock, session)
-        return StatusClient(provider, dependencies.clock)
+        return StatusClient(_cached(provider, cache_policy, dependencies.clock), dependencies.clock)
     if type(config) is OpenCodeGoConfig:
         if not _valid_opencode(config):
             _fail(CompositionErrorKind.INVALID)
@@ -118,5 +123,9 @@ def build_status_client(
         )
         transport = dependencies.transport_factory(config)
         provider = OpenCodeGoProvider(adapter_config, transport, clock=dependencies.clock.now)
-        return StatusClient(provider, dependencies.clock)
+        return StatusClient(_cached(provider, cache_policy, dependencies.clock), dependencies.clock)
     _fail(CompositionErrorKind.INVALID)
+
+
+def _cached(provider, policy, clock):
+    return provider if policy is None else CachedProviderReader(provider, policy, clock)

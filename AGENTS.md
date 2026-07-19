@@ -13,7 +13,7 @@ Limitora provides a typed, provider-agnostic quota and status API, with Codex JS
 
 ## Commands
 
-- Test: `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v`
+- Test: `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python3 -m unittest discover -s tests -v`
 - Build: `python3 -m build` when the standard build frontend is installed.
 - No repository lint, format, or type-check command is configured. Do not invent one.
 

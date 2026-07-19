@@ -9,6 +9,7 @@ from .contract import (
     ProviderRequest,
     map_port_failure,
 )
+from .cache import CachedProviderReader, ProviderCachePolicy
 from .fake import FakeProvider
 from .ports import (
     Clock,
@@ -25,6 +26,7 @@ from .ports import (
 )
 __all__ = [
     "AuthorizationPolicy",
+    "CachedProviderReader",
     "Clock",
     "CommandPort",
     "CommandResult",
@@ -38,6 +40,7 @@ __all__ = [
     "PortFailureKind",
     "PortKind",
     "ProviderDetection",
+    "ProviderCachePolicy",
     "ProviderError",
     "ProviderErrorKind",
     "ProviderReader",

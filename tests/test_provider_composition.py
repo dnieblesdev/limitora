@@ -19,6 +19,7 @@ from limitora.composition import (
     OpenCodeGoDependencies,
     build_status_client,
 )
+from limitora.providers.cache import ProviderCachePolicy
 from limitora.providers.ports import HttpResponse
 NOW = datetime(2026, 7, 18, 12, tzinfo=timezone.utc)
 REQUEST = StatusRequest(
@@ -56,6 +57,23 @@ def codex_payload():
 def opencode_response():
     return HttpResponse(200, b'{"rollingUsage":{"usagePercent":25,"resetInSec":10}}')
 class ProviderCompositionTests(unittest.TestCase):
+    def test_cache_option_is_default_off_validated_before_factories_and_wraps_both_providers(self):
+        clock, calls = FixedClock(), []
+        deps = CodexJsonlDependencies(clock, lambda: calls.append(True) or Session(codex_payload()))
+        with self.assertRaises(CompositionError): build_status_client(CodexJsonlConfig(("/declared/codex",)), deps, cache_policy=object())
+        self.assertEqual([], calls)
+        policy = ProviderCachePolicy(timedelta(minutes=1), timedelta(minutes=2))
+        client = build_status_client(CodexJsonlConfig(("/declared/codex",)), deps, cache_policy=policy)
+        client.read_status(REQUEST); client.read_status(REQUEST)
+        self.assertEqual(1, len(calls)); self.assertEqual(1, client._service._provider._reader._session.calls)
+        uncached_session = Session(codex_payload())
+        uncached = build_status_client(CodexJsonlConfig(("/declared/codex",)), CodexJsonlDependencies(clock, lambda: uncached_session))
+        uncached.read_status(REQUEST); uncached.read_status(REQUEST)
+        self.assertEqual(2, uncached_session.calls)
+        transport = Transport(opencode_response())
+        opencode = build_status_client(OpenCodeGoConfig("workspace", "cookie"), OpenCodeGoDependencies(clock, lambda config: transport), cache_policy=policy)
+        opencode.read_status(REQUEST); opencode.read_status(REQUEST)
+        self.assertEqual(1, transport.calls)
     def test_configs_are_frozen_and_discriminator_is_closed(self):
         codex = CodexJsonlConfig(("/declared/codex",))
         opencode = OpenCodeGoConfig("workspace", "opaque-cookie")
