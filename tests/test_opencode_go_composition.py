@@ -5,8 +5,8 @@ from io import StringIO
 import limitora
 from limitora import AuthorizationPolicy, Freshness, FreshnessPolicy, MetricKind, StatusRequest, StatusSnapshotResult
 from limitora.cli import main
-from limitora.cli import _render_snapshot
 from limitora.models import ProviderState
+from limitora.output import render_human
 from limitora.providers.ports import HttpResponse
 from limitora.composition import OpenCodeGoConfig, OpenCodeGoDependencies, build_status_client
 
@@ -65,7 +65,7 @@ class OpenCodeGoCompositionTests(unittest.TestCase):
         client, _ = self.provider(HttpResponse(200, b'{"rollingUsage":{"usagePercent":20,"resetInSec":10}}'))
         snapshot = client.read_status(REQUEST).snapshot
 
-        rendered = _render_snapshot(StatusSnapshotResult(snapshot, Freshness.FRESH))
+        rendered = render_human(StatusSnapshotResult(snapshot, Freshness.FRESH))
 
         self.assertIn("PROVIDER: opencode-go", rendered)
         self.assertIn("PLAN_ID: unavailable", rendered)
