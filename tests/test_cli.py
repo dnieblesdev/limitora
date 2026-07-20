@@ -440,26 +440,6 @@ class JsonRoutingTests(unittest.TestCase):
         self.assertIn("KIND: unauthorized", errors)
 
 
-class OpenCodeGoIntermediateTests(unittest.TestCase):
-    def test_opencode_provider_in_wu1_raises_composition_error(self):
-        code, output, errors, _, _ = invoke([
-            "status", "--provider", "opencode-go",
-            "--workspace-id", "ws1", "--auth-cookie", "opaque",
-        ])
-        self.assertEqual(2, code)
-        self.assertEqual("", output)
-        self.assertEqual("provider composition input is invalid\n", errors)
-
-    def test_opencode_provider_with_json_in_wu1_writes_error_to_stderr(self):
-        code, output, errors, _, _ = invoke([
-            "status", "--json", "--provider", "opencode-go",
-            "--workspace-id", "ws1", "--auth-cookie", "opaque",
-        ])
-        self.assertEqual(2, code)
-        self.assertEqual("", output)
-        self.assertEqual("provider composition input is invalid\n", errors)
-
-
 class PrivacyContractTests(unittest.TestCase):
     def test_cli_source_excludes_privacy_forbidden_symbols(self):
         project = Path(__file__).parents[1]
@@ -495,14 +475,22 @@ class PrivacyContractTests(unittest.TestCase):
         self.assertNotIn("Traceback", output + errors)
         self.assertNotIn("__cause__", output + errors)
 
-    def test_opencode_intermediate_path_never_echoes_auth_cookie(self):
+    def test_help_text_does_not_leak_secrets_or_traceback(self):
+        code, output, errors, _, _ = invoke(["status", "--help"])
+        self.assertNotIn("secret", output + errors)
+        self.assertNotIn("Traceback", output + errors)
+        self.assertNotIn("__cause__", output + errors)
+
+    def test_opencode_go_path_default_deny_never_echoes_auth_cookie(self):
+        """WU2: auth cookie never appears in any captured stream, default DENY."""
         code, output, errors, _, _ = invoke([
             "status", "--provider", "opencode-go",
             "--workspace-id", "ws-secret-ws",
             "--auth-cookie", "opaque-secret-cookie",
         ])
-        self.assertEqual(2, code)
+        self.assertEqual(5, code)
         self.assertEqual("", output)
+        self.assertIn("KIND: unauthorized", errors)
         self.assertNotIn("opaque-secret-cookie", errors)
         self.assertNotIn("ws-secret-ws", errors)
         self.assertNotIn("auth=", errors)
@@ -510,11 +498,54 @@ class PrivacyContractTests(unittest.TestCase):
         self.assertNotIn("Traceback", errors)
         self.assertNotIn("__cause__", errors)
 
-    def test_help_text_does_not_leak_secrets_or_traceback(self):
-        code, output, errors, _, _ = invoke(["status", "--help"])
-        self.assertNotIn("secret", output + errors)
-        self.assertNotIn("Traceback", output + errors)
-        self.assertNotIn("__cause__", output + errors)
+    def test_opencode_go_path_with_allow_authorized_never_echoes_auth_cookie(self):
+        """WU2: auth cookie never appears when transport is exercised under ALLOW.
+
+        The real httpx transport is patched so this offline contract test does
+        not issue a live HTTP request.
+        """
+        from limitora.providers import _opencode_go_httpx
+        from limitora.providers.ports import HttpResponse
+
+        class StubTransport:
+            def __init__(self, config, **_):
+                self.config = config
+
+            def fetch(self):
+                return HttpResponse(500, b'{"error":"server failure"}')
+
+        with patch.object(_opencode_go_httpx, "_HttpxOpenCodeGoTransport", StubTransport):
+            code, output, errors, _, _ = invoke([
+                "status", "--provider", "opencode-go",
+                "--workspace-id", "ws-secret-ws",
+                "--auth-cookie", "opaque-secret-cookie",
+                "--opencode-allow-authorized-source",
+            ])
+        self.assertEqual(5, code)
+        combined = output + errors
+        self.assertNotIn("opaque-secret-cookie", combined)
+        self.assertNotIn("ws-secret-ws", combined)
+        self.assertNotIn("auth=", combined)
+        self.assertNotIn("secret", combined)
+        self.assertNotIn("Traceback", combined)
+        self.assertNotIn("__cause__", combined)
+
+    def test_opencode_go_path_with_json_never_echoes_auth_cookie(self):
+        """WU2: auth cookie never appears in the JSON envelope on stdout."""
+        code, output, errors, _, _ = invoke([
+            "status", "--json", "--provider", "opencode-go",
+            "--workspace-id", "ws-secret-ws",
+            "--auth-cookie", "opaque-secret-cookie",
+        ])
+        self.assertEqual(5, code)
+        self.assertEqual("", errors)
+        self.assertIn('"kind": "unauthorized"', output)
+        self.assertNotIn("opaque-secret-cookie", output)
+        self.assertNotIn("ws-secret-ws", output)
+        self.assertNotIn("auth=", output)
+        self.assertNotIn("secret", output)
+        self.assertNotIn("Traceback", output)
+        self.assertNotIn("__cause__", output)
 
 
 class RendererRegressionTests(unittest.TestCase):
