@@ -1,12 +1,14 @@
 import unittest
 from dataclasses import FrozenInstanceError
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from limitora import (
     AuthorizationPolicy,
     Freshness,
     FreshnessPolicy,
     MetricKind,
+    StatusClient,
     StatusSnapshotResult,
     StatusRequest,
 )
@@ -17,6 +19,7 @@ from limitora.composition import (
     CompositionErrorKind,
     OpenCodeGoConfig,
     OpenCodeGoDependencies,
+    activate_provider,
     build_status_client,
 )
 from limitora.providers.cache import ProviderCachePolicy
@@ -228,5 +231,86 @@ class ProviderCompositionTests(unittest.TestCase):
         self.assertNotIn(secret, raised.exception.safe_message)
         self.assertNotIn("workspace", raised.exception.safe_message)
         self.assertNotIn("bad", raised.exception.safe_message)
+
+
+class ActivateProviderTests(unittest.TestCase):
+    def test_codex_builds_status_client_without_io_at_construction(self):
+        from limitora.providers._codex_jsonl import _CodexJsonlSession
+        from unittest.mock import patch
+
+        client = activate_provider(CodexJsonlConfig(("/declared/codex",)), clock=FixedClock())
+        self.assertIsInstance(client, StatusClient)
+        provider = client._service._provider
+        self.assertIsInstance(provider._session, _CodexJsonlSession)
+
+    def test_codex_constructs_with_injected_clock(self):
+        clock = FixedClock()
+        client = activate_provider(CodexJsonlConfig(("/declared/codex",)), clock=clock)
+        self.assertIs(client._clock, clock)
+
+    def test_codex_uses_current_clock_by_default(self):
+        from limitora.api import CurrentClock
+
+        client = activate_provider(CodexJsonlConfig(("/declared/codex",)))
+        self.assertIsInstance(client._clock, CurrentClock)
+
+    def test_codex_read_status_invokes_session_factory_exactly_once(self):
+        from limitora.providers._codex_jsonl import _CodexJsonlSession
+
+        session_calls = []
+
+        def session_factory():
+            session_calls.append(True)
+            return _CodexJsonlSession()
+
+        from limitora.composition import CodexJsonlDependencies, build_status_client
+
+        with self.assertRaises(CompositionError):
+            build_status_client(
+                CodexJsonlConfig(("/declared/codex",)),
+                CodexJsonlDependencies(FixedClock(), session_factory),
+                enabled=False,
+            )
+        self.assertEqual([], session_calls)
+
+    def test_opencode_go_branch_raises_invalid_in_wu1(self):
+        with self.assertRaises(CompositionError) as raised:
+            activate_provider(OpenCodeGoConfig("workspace", "opaque"))
+        self.assertEqual(CompositionErrorKind.INVALID, raised.exception.kind)
+        self.assertEqual("provider composition input is invalid", raised.exception.safe_message)
+
+    def test_opencode_go_branch_does_not_import_httpx(self):
+        import sys
+
+        saved_httpx = sys.modules.pop("httpx", None)
+        try:
+            try:
+                activate_provider(OpenCodeGoConfig("workspace", "opaque"))
+            except CompositionError:
+                pass
+            self.assertNotIn("httpx", sys.modules)
+        finally:
+            if saved_httpx is not None:
+                sys.modules["httpx"] = saved_httpx
+
+    def test_unknown_config_raises_invalid(self):
+        class Third(CodexJsonlConfig):
+            pass
+
+        with self.assertRaises(CompositionError) as raised:
+            activate_provider(Third(("/declared/codex",)))
+        self.assertEqual(CompositionErrorKind.INVALID, raised.exception.kind)
+
+    def test_composition_is_sole_importer_of_private_adapter_modules(self):
+        from pathlib import Path
+
+        project = Path(__file__).parents[1]
+        cli_source = (project / "src/limitora/cli/__init__.py").read_text()
+        self.assertNotIn("_codex_jsonl", cli_source)
+        self.assertNotIn("_opencode_go_httpx", cli_source)
+
+        composition_source = (project / "src/limitora/composition.py").read_text()
+        self.assertIn("_codex_jsonl", composition_source)
+        self.assertIn("OpenCodeGoConfig", composition_source)
 if __name__ == "__main__":
     unittest.main()

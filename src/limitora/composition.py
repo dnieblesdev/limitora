@@ -8,7 +8,7 @@ from os.path import isabs
 from enum import Enum
 from typing import Callable, Literal, Protocol, TypeAlias
 
-from .api import StatusClient
+from .api import CurrentClock, StatusClient
 from .providers.cache import CachedProviderReader, ProviderCachePolicy
 from .providers.ports import Clock
 from .providers._opencode_go import OpenCodeGoConfig as AdapterOpenCodeGoConfig, OpenCodeGoProvider
@@ -129,3 +129,34 @@ def build_status_client(
 
 def _cached(provider, policy, clock):
     return provider if policy is None else CachedProviderReader(provider, policy, clock)
+
+
+def activate_provider(
+    config: ProviderConfig,
+    *,
+    enabled: bool = True,
+    clock: Clock | None = None,
+) -> StatusClient:
+    """Build a :class:`StatusClient` for a single validated :data:`ProviderConfig`.
+
+    Sole trust boundary that imports the private adapter modules. Dispatches
+    on the :data:`ProviderConfig` discriminator and constructs the matching
+    :data:`ProviderDependencies` before delegating to
+    :func:`build_status_client`. The CLI calls this helper exclusively; it
+    never imports ``_codex_jsonl`` or ``_opencode_go_httpx`` directly.
+
+    The Codex branch lazily imports ``_codex_jsonl`` so the module can be
+    imported without a working ``subprocess`` environment. The OpenCode Go
+    branch is intentionally left as an ``INVALID`` fallthrough in the first
+    work unit; the OpenCode Go activation is shipped in a follow-up work
+    unit that fills this branch with the lazy ``_opencode_go_httpx`` import.
+    """
+    resolved_clock = CurrentClock() if clock is None else clock
+    if type(config) is CodexJsonlConfig:
+        from .providers._codex_jsonl import _CodexJsonlSession
+        dependencies = CodexJsonlDependencies(resolved_clock, lambda: _CodexJsonlSession())
+    elif type(config) is OpenCodeGoConfig:
+        _fail(CompositionErrorKind.INVALID)
+    else:
+        _fail(CompositionErrorKind.INVALID)
+    return build_status_client(config, dependencies, enabled=enabled)
