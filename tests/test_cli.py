@@ -1,4 +1,4 @@
-"""Offline contract tests for the human-readable status CLI."""
+"""Offline contract tests for the human-readable and JSON status CLI."""
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -6,14 +6,19 @@ from io import StringIO
 from pathlib import Path
 import tomllib
 import unittest
+from unittest.mock import patch
 
 from limitora import (
     AuthorizationPolicy, Freshness, FreshnessPolicy, MetricKind, ProviderError,
     ProviderErrorKind, ProviderId, ProviderSnapshot, ProviderState, ProviderStatus,
     SourceMetadata, StatusRequest, StatusSnapshotResult, StatusUndetectedResult,
 )
+from limitora.composition import CodexJsonlConfig, CompositionError, OpenCodeGoConfig, activate_provider
+from limitora.cli import (
+    CliIntent, CliUsageError, CodexIntent, OpenCodeGoIntent, _HELP, _USAGE,
+    intent_to_config, main, parse,
+)
 from limitora.models import Quantity, QuotaWindow, UsageSnapshot, ValueAvailability, WindowKind
-from limitora.cli import main
 
 
 UTC = timezone.utc
@@ -24,6 +29,7 @@ EXPECTED_REQUEST = StatusRequest(
     AuthorizationPolicy.DENY_AUTHORIZED_SOURCE,
     FreshnessPolicy(timedelta(minutes=5)),
 )
+CODEX_RUNNER = ("/declared/codex", "run")
 
 
 def snapshot(*, freshness=Freshness.FRESH, windows=(), usage=None):
@@ -50,15 +56,468 @@ def invoke(argv, result=None):
     return code, output.getvalue(), errors.getvalue(), client, factory_calls
 
 
-class CliTests(unittest.TestCase):
-    def test_help_and_invalid_grammar_use_exclusive_streams(self):
-        code, output, errors, _, _ = invoke(["status", "--help"])
-        self.assertEqual((0, "limitora status: human-readable status only; JSON and provider/configuration options are unavailable.\n", ""), (code, output, errors))
-        for argv in ([], ["version"], ["status", "--json"], ["status", "extra"]):
-            code, output, errors, _, _ = invoke(argv)
-            self.assertEqual(2, code); self.assertEqual("", output)
-            self.assertEqual("Usage: limitora status [--help]\n", errors)
+def invoke_with_factory(argv, factory):
+    output, errors = StringIO(), StringIO()
+    code = main(argv, client_factory=factory, stdout=output, stderr=errors)
+    return code, output.getvalue(), errors.getvalue()
 
+
+def invoke_with_provider(argv, client):
+    """Invoke the CLI while patching ``activate_provider`` to return ``client``.
+
+    The CLI delegates to ``activate_provider`` whenever ``--provider`` is
+    given, so the test injects the pre-built client through that seam.
+    """
+    output, errors = StringIO(), StringIO()
+    with patch("limitora.cli.activate_provider", return_value=client) as mock_activate:
+        code = main(argv, stdout=output, stderr=errors)
+    return code, output.getvalue(), errors.getvalue(), client, mock_activate
+
+
+class HelpAndUnconfiguredTests(unittest.TestCase):
+    def test_help_text_writes_to_stdout_and_exits_zero(self):
+        code, output, errors, _, _ = invoke(["status", "--help"])
+        self.assertEqual(0, code)
+        self.assertEqual(_HELP, output)
+        self.assertEqual("", errors)
+
+    def test_help_with_json_writes_to_stderr_leaves_stdout_empty(self):
+        code, output, errors, _, _ = invoke(["status", "--json", "--help"])
+        self.assertEqual(0, code)
+        self.assertEqual("", output)
+        self.assertEqual(_HELP, errors)
+
+    def test_help_text_documents_provider_and_json_flags(self):
+        self.assertIn("--json", _HELP)
+        self.assertIn("--provider", _HELP)
+        self.assertIn("--runner", _HELP)
+        self.assertIn("--workspace-id", _HELP)
+        self.assertIn("--auth-cookie", _HELP)
+        self.assertIn("--timeout", _HELP)
+        self.assertIn("--endpoint", _HELP)
+
+    def test_no_flags_routes_to_unconfigured_stderr_and_exit_four(self):
+        code, output, errors, _, _ = invoke(["status"])
+        self.assertEqual(4, code)
+        self.assertEqual("ERROR: no provider configured\n", errors)
+        self.assertEqual("", output)
+
+    def test_json_flag_without_provider_routes_to_unconfigured_exit_four(self):
+        code, output, errors, _, _ = invoke(["status", "--json"])
+        self.assertEqual(4, code)
+        self.assertEqual("ERROR: no provider configured\n", errors)
+        self.assertEqual("", output)
+
+    def test_help_still_wins_over_json_with_client_factory_present(self):
+        code, output, errors, _, _ = invoke(["status", "--help", "--json"], snapshot())
+        self.assertEqual(0, code)
+        self.assertEqual("", output)
+        self.assertEqual(_HELP, errors)
+
+
+class InvalidGrammarTests(unittest.TestCase):
+    def test_unknown_provider_value_is_usage_error_exit_two(self):
+        for argv in (
+            ["status", "--provider", "bogus"],
+            ["status", "--provider", "BOGUS"],
+            ["status", "--provider", "codexx"],
+        ):
+            with self.subTest(argv=argv):
+                code, output, errors, _, _ = invoke(argv)
+                self.assertEqual(2, code)
+                self.assertEqual("", output)
+                self.assertTrue(errors.startswith(_USAGE), msg=errors)
+                self.assertTrue(errors.endswith("\n"))
+
+    def test_codex_without_runner_is_usage_error_exit_two(self):
+        code, output, errors, _, _ = invoke(["status", "--provider", "codex"])
+        self.assertEqual(2, code)
+        self.assertEqual("", output)
+        self.assertTrue(errors.startswith(_USAGE), msg=errors)
+        self.assertIn("codex", errors)
+
+    def test_opencode_without_required_flags_is_usage_error_exit_two(self):
+        for argv in (
+            ["status", "--provider", "opencode-go"],
+            ["status", "--provider", "opencode-go", "--workspace-id", "ws"],
+            ["status", "--provider", "opencode-go", "--auth-cookie", "c"],
+        ):
+            with self.subTest(argv=argv):
+                code, output, errors, _, _ = invoke(argv)
+                self.assertEqual(2, code)
+                self.assertEqual("", output)
+                self.assertTrue(errors.startswith(_USAGE), msg=errors)
+                self.assertIn("opencode-go", errors)
+
+    def test_runner_with_opencode_provider_is_cross_flag_usage_error(self):
+        code, output, errors, _, _ = invoke(["status", "--provider", "opencode-go", "--runner", "/x"])
+        self.assertEqual(2, code)
+        self.assertEqual("", output)
+        self.assertTrue(errors.startswith(_USAGE), msg=errors)
+        self.assertIn("codex flags", errors)
+
+    def test_workspace_id_with_codex_provider_is_cross_flag_usage_error(self):
+        code, output, errors, _, _ = invoke(["status", "--provider", "codex", "--workspace-id", "ws"])
+        self.assertEqual(2, code)
+        self.assertEqual("", output)
+        self.assertTrue(errors.startswith(_USAGE), msg=errors)
+        self.assertIn("opencode-go flags", errors)
+
+    def test_duplicate_json_flag_is_usage_error(self):
+        code, output, errors, _, _ = invoke(["status", "--json", "--json"])
+        self.assertEqual(2, code)
+        self.assertEqual("", output)
+        self.assertIn("more than once", errors)
+
+    def test_duplicate_workspace_id_is_usage_error(self):
+        code, output, errors, _, _ = invoke([
+            "status", "--provider", "opencode-go",
+            "--workspace-id", "a", "--workspace-id", "b",
+            "--auth-cookie", "c",
+        ])
+        self.assertEqual(2, code)
+        self.assertEqual("", output)
+        self.assertIn("more than once", errors)
+
+    def test_runner_missing_value_at_end_is_usage_error(self):
+        code, output, errors, _, _ = invoke(["status", "--provider", "codex", "--runner"])
+        self.assertEqual(2, code)
+        self.assertEqual("", output)
+        self.assertIn("requires a value", errors)
+
+    def test_runner_followed_by_flag_is_usage_error(self):
+        code, output, errors, _, _ = invoke(["status", "--provider", "codex", "--runner", "--json"])
+        self.assertEqual(2, code)
+        self.assertEqual("", output)
+        self.assertIn("requires a value", errors)
+
+    def test_unexpected_positional_is_usage_error(self):
+        for argv in (["status", "extra"], ["status", "status"]):
+            with self.subTest(argv=argv):
+                code, output, errors, _, _ = invoke(argv)
+                self.assertEqual(2, code)
+                self.assertEqual("", output)
+                self.assertIn("unexpected positional", errors)
+
+    def test_keyvalue_form_is_rejected(self):
+        for argv in (
+            ["status", "--provider=codex"],
+            ["status", "--runner=/x"],
+            ["status", "--workspace-id=ws"],
+        ):
+            with self.subTest(argv=argv):
+                code, output, errors, _, _ = invoke(argv)
+                self.assertEqual(2, code)
+                self.assertEqual("", output)
+                self.assertIn("--key=value", errors)
+
+    def test_unknown_flag_is_usage_error(self):
+        code, output, errors, _, _ = invoke(["status", "--bogus"])
+        self.assertEqual(2, code)
+        self.assertEqual("", output)
+        self.assertIn("unknown flag", errors)
+
+    def test_legacy_grammar_without_status_is_usage_error(self):
+        for argv in ([], ["version"]):
+            with self.subTest(argv=argv):
+                code, output, errors, _, _ = invoke(argv)
+                self.assertEqual(2, code)
+                self.assertEqual("", output)
+                self.assertEqual(_USAGE, errors)
+
+    def test_timeout_must_be_positive_integer_under_eleven(self):
+        for argv in (
+            ["status", "--provider", "opencode-go",
+             "--workspace-id", "ws", "--auth-cookie", "c",
+             "--timeout", "0"],
+            ["status", "--provider", "opencode-go",
+             "--workspace-id", "ws", "--auth-cookie", "c",
+             "--timeout", "11"],
+            ["status", "--provider", "opencode-go",
+             "--workspace-id", "ws", "--auth-cookie", "c",
+             "--timeout", "abc"],
+        ):
+            with self.subTest(argv=argv):
+                code, output, errors, _, _ = invoke(argv)
+                self.assertEqual(2, code)
+                self.assertEqual("", output)
+                self.assertIn("--timeout", errors)
+
+
+class ParseUnitTests(unittest.TestCase):
+    def test_parse_help_only(self):
+        intent = parse(["status", "--help"])
+        self.assertEqual(CliIntent(help_requested=True), intent)
+
+    def test_parse_help_and_json_intent_captures_both(self):
+        intent = parse(["status", "--help", "--json"])
+        self.assertTrue(intent.help_requested)
+        self.assertTrue(intent.json_requested)
+        self.assertIsNone(intent.provider)
+
+    def test_parse_codex_with_repeated_runner_builds_tuple(self):
+        intent = parse(["status", "--provider", "codex", "--runner", "/bin/sh", "--runner", "-c"])
+        self.assertEqual("codex", intent.provider)
+        self.assertEqual(("/bin/sh", "-c"), intent.codex.runner)
+
+    def test_parse_opencode_uses_defaults(self):
+        intent = parse([
+            "status", "--provider", "opencode-go",
+            "--workspace-id", "ws1", "--auth-cookie", "c1",
+        ])
+        self.assertEqual("opencode-go", intent.provider)
+        self.assertEqual("ws1", intent.opencode.workspace_id)
+        self.assertEqual("c1", intent.opencode.auth_cookie)
+        self.assertEqual("https://opencode.ai", intent.opencode.endpoint)
+        self.assertEqual(10, intent.opencode.timeout_seconds)
+        self.assertFalse(intent.opencode.allow_authorized_source)
+
+    def test_parse_allow_authorized_source_flags(self):
+        codex_intent = parse([
+            "status", "--provider", "codex", "--runner", "/x",
+            "--codex-allow-authorized-source",
+        ])
+        self.assertTrue(codex_intent.codex.allow_authorized_source)
+        opencode_intent = parse([
+            "status", "--provider", "opencode-go",
+            "--workspace-id", "ws", "--auth-cookie", "c",
+            "--opencode-allow-authorized-source",
+        ])
+        self.assertTrue(opencode_intent.opencode.allow_authorized_source)
+
+    def test_parse_raises_usage_error_for_known_violations(self):
+        cases = (
+            ["status", "--provider", "bogus"],
+            ["status", "--provider", "codex"],
+            ["status", "--provider", "codex", "--runner"],
+            ["status", "--provider", "codex", "--runner", "--json"],
+            ["status", "--json", "--json"],
+            ["status", "extra"],
+            ["status", "--provider=codex"],
+            ["status", "--bogus"],
+        )
+        for argv in cases:
+            with self.subTest(argv=argv):
+                with self.assertRaises(CliUsageError):
+                    parse(argv)
+
+    def test_parse_status_token_must_be_present(self):
+        with self.assertRaises(CliUsageError):
+            parse([])
+
+
+class IntentToConfigUnitTests(unittest.TestCase):
+    def test_codex_intent_maps_to_codex_config(self):
+        intent = CliIntent(
+            provider="codex",
+            codex=CodexIntent(runner=CODEX_RUNNER),
+        )
+        config = intent_to_config(intent)
+        self.assertEqual(CodexJsonlConfig(runner=CODEX_RUNNER), config)
+
+    def test_opencode_intent_maps_to_opencode_config(self):
+        intent = CliIntent(
+            provider="opencode-go",
+            opencode=OpenCodeGoIntent(workspace_id="ws1", auth_cookie="c1", endpoint="https://opencode.ai", timeout_seconds=5),
+        )
+        config = intent_to_config(intent)
+        self.assertEqual(
+            OpenCodeGoConfig(workspace_id="ws1", auth_cookie="c1", endpoint="https://opencode.ai", timeout=timedelta(seconds=5)),
+            config,
+        )
+
+    def test_intent_without_provider_raises_composition_error(self):
+        with self.assertRaises(CompositionError):
+            intent_to_config(CliIntent())
+
+    def test_intent_to_config_is_pure_no_io(self):
+        intent = CliIntent(provider="codex", codex=CodexIntent(runner=CODEX_RUNNER))
+        with patch("subprocess.Popen") as mock_popen:
+            intent_to_config(intent)
+        mock_popen.assert_not_called()
+
+
+class CodexActivationTests(unittest.TestCase):
+    def test_codex_path_activates_provider_and_renders_human(self):
+        fake = FakeClient(snapshot())
+        code, output, errors, client, mock_activate = invoke_with_provider(
+            ["status", "--provider", "codex", "--runner", "/declared/codex"],
+            fake,
+        )
+        self.assertEqual(0, code)
+        self.assertEqual("", errors)
+        self.assertIn("RESULT: snapshot", output)
+        mock_activate.assert_called_once()
+        self.assertIs(client, fake)
+
+    def test_authorization_defaults_to_deny_for_codex(self):
+        fake = FakeClient(snapshot())
+        code, output, errors, _, _ = invoke_with_provider(
+            ["status", "--provider", "codex", "--runner", "/declared/codex"],
+            fake,
+        )
+        self.assertEqual(0, code)
+        self.assertIn("RESULT: snapshot", output)
+        self.assertEqual(1, len(fake.requests))
+        self.assertEqual(AuthorizationPolicy.DENY_AUTHORIZED_SOURCE, fake.requests[0].authorization_policy)
+
+    def test_codex_allow_authorized_source_opt_in(self):
+        fake = FakeClient(snapshot())
+        code, output, errors, _, _ = invoke_with_provider(
+            [
+                "status", "--provider", "codex", "--runner", "/declared/codex",
+                "--codex-allow-authorized-source",
+            ],
+            fake,
+        )
+        self.assertEqual(0, code)
+        self.assertEqual("", errors)
+        self.assertIn("RESULT: snapshot", output)
+        self.assertEqual(AuthorizationPolicy.ALLOW_AUTHORIZED_SOURCE, fake.requests[0].authorization_policy)
+
+
+class JsonRoutingTests(unittest.TestCase):
+    def test_json_ok_status_writes_json_document(self):
+        fake = FakeClient(snapshot())
+        code, output, errors, _, _ = invoke_with_provider(
+            ["status", "--json", "--provider", "codex", "--runner", "/declared/codex"],
+            fake,
+        )
+        self.assertEqual(0, code)
+        self.assertEqual("", errors)
+        self.assertIn('"result": "snapshot"', output)
+        self.assertIn('"version": 1', output)
+        self.assertTrue(output.endswith("\n"))
+
+    def test_json_stale_status_writes_document_and_exit_three(self):
+        fake = FakeClient(snapshot(freshness=Freshness.STALE))
+        code, output, errors, _, _ = invoke_with_provider(
+            ["status", "--json", "--provider", "codex", "--runner", "/declared/codex"],
+            fake,
+        )
+        self.assertEqual(3, code)
+        self.assertEqual("", errors)
+        self.assertIn('"freshness": "stale"', output)
+
+    def test_json_undetected_writes_envelope(self):
+        fake = FakeClient(StatusUndetectedResult())
+        code, output, errors, _, _ = invoke_with_provider(
+            ["status", "--json", "--provider", "codex", "--runner", "/declared/codex"],
+            fake,
+        )
+        self.assertEqual(0, code)
+        self.assertEqual("", errors)
+        self.assertIn('"result": "undetected"', output)
+
+    def test_json_provider_error_writes_envelope_to_stdout_and_stderr_empty(self):
+        error = ProviderError(ProviderErrorKind.UNAUTHORIZED, PROVIDER, "safe", retryable=False)
+        fake = FakeClient(error)
+        code, output, errors, _, _ = invoke_with_provider(
+            [
+                "status", "--json", "--provider", "codex", "--runner", "/declared/codex",
+                "--codex-allow-authorized-source",
+            ],
+            fake,
+        )
+        self.assertEqual(5, code)
+        self.assertEqual("", errors)
+        self.assertIn('"error"', output)
+        self.assertIn('"kind": "unauthorized"', output)
+        self.assertIn('"safe_message": "safe"', output)
+
+    def test_json_provider_error_human_mode_stays_on_stderr(self):
+        error = ProviderError(ProviderErrorKind.UNAUTHORIZED, PROVIDER, "safe", retryable=False)
+        fake = FakeClient(error)
+        code, output, errors, _, _ = invoke_with_provider(
+            [
+                "status", "--provider", "codex", "--runner", "/declared/codex",
+                "--codex-allow-authorized-source",
+            ],
+            fake,
+        )
+        self.assertEqual(5, code)
+        self.assertEqual("", output)
+        self.assertIn("KIND: unauthorized", errors)
+
+
+class OpenCodeGoIntermediateTests(unittest.TestCase):
+    def test_opencode_provider_in_wu1_raises_composition_error(self):
+        code, output, errors, _, _ = invoke([
+            "status", "--provider", "opencode-go",
+            "--workspace-id", "ws1", "--auth-cookie", "opaque",
+        ])
+        self.assertEqual(2, code)
+        self.assertEqual("", output)
+        self.assertEqual("provider composition input is invalid\n", errors)
+
+    def test_opencode_provider_with_json_in_wu1_writes_error_to_stderr(self):
+        code, output, errors, _, _ = invoke([
+            "status", "--json", "--provider", "opencode-go",
+            "--workspace-id", "ws1", "--auth-cookie", "opaque",
+        ])
+        self.assertEqual(2, code)
+        self.assertEqual("", output)
+        self.assertEqual("provider composition input is invalid\n", errors)
+
+
+class PrivacyContractTests(unittest.TestCase):
+    def test_cli_source_excludes_privacy_forbidden_symbols(self):
+        project = Path(__file__).parents[1]
+        source = (project / "src/limitora/cli/__init__.py").read_text()
+        for forbidden in ("argparse", "subprocess", "import os", "pathlib", "StatusProvider"):
+            self.assertNotIn(forbidden, source)
+
+    def test_cli_module_delegates_rendering_to_output(self):
+        project = Path(__file__).parents[1]
+        source = (project / "src/limitora/cli/__init__.py").read_text()
+        self.assertIn("from limitora.output import render_human", source)
+        self.assertIn("render_json", source)
+        for forbidden in (
+            "def _render_snapshot", "def _render_usage", "def _render_error",
+            "def _timestamp", "def _optional", "def _quantity",
+        ):
+            with self.subTest(symbol=forbidden):
+                self.assertNotIn(forbidden, source)
+
+    def test_compose_entry_point_in_pyproject_and_cli_not_in_root_all(self):
+        project = Path(__file__).parents[1]
+        with (project / "pyproject.toml").open("rb") as file:
+            self.assertEqual("limitora.cli:console_main", tomllib.load(file)["project"]["scripts"]["limitora"])
+        import limitora
+        self.assertNotIn("cli", limitora.__all__)
+
+    def test_provider_error_with_secret_cause_never_leaks_in_human(self):
+        error = ProviderError(ProviderErrorKind.TRANSPORT, PROVIDER, "safe", retryable=True)
+        error.__cause__ = RuntimeError("token=secret")
+        _, output, errors, _, _ = invoke(["status"], error)
+        self.assertNotIn("secret", output + errors)
+        self.assertNotIn("token=", output + errors)
+        self.assertNotIn("Traceback", output + errors)
+        self.assertNotIn("__cause__", output + errors)
+
+    def test_opencode_intermediate_path_never_echoes_auth_cookie(self):
+        code, output, errors, _, _ = invoke([
+            "status", "--provider", "opencode-go",
+            "--workspace-id", "ws-secret-ws",
+            "--auth-cookie", "opaque-secret-cookie",
+        ])
+        self.assertEqual(2, code)
+        self.assertEqual("", output)
+        self.assertNotIn("opaque-secret-cookie", errors)
+        self.assertNotIn("ws-secret-ws", errors)
+        self.assertNotIn("auth=", errors)
+        self.assertNotIn("secret", errors)
+        self.assertNotIn("Traceback", errors)
+        self.assertNotIn("__cause__", errors)
+
+    def test_help_text_does_not_leak_secrets_or_traceback(self):
+        code, output, errors, _, _ = invoke(["status", "--help"])
+        self.assertNotIn("secret", output + errors)
+        self.assertNotIn("Traceback", output + errors)
+        self.assertNotIn("__cause__", output + errors)
+
+
+class RendererRegressionTests(unittest.TestCase):
     def test_fixed_request_and_fresh_snapshot_are_rendered(self):
         code, output, errors, client, factories = invoke(["status"], snapshot())
         self.assertEqual(0, code); self.assertEqual("", errors); self.assertEqual([True], factories)
@@ -96,36 +555,6 @@ class CliTests(unittest.TestCase):
         self.assertIn("RESET_AT: 2026-07-15T12:00:00Z", output)
         self.assertIn("USAGE:\n  OBSERVED_AT: 2026-07-15T12:00:00Z\n  AVAILABILITY: known", output)
         self.assertNotIn("%", output)
-
-    def test_privacy_packaging_root_and_scope_boundaries(self):
-        error = ProviderError(ProviderErrorKind.TRANSPORT, PROVIDER, "safe", retryable=True)
-        error.__cause__ = RuntimeError("token=secret")
-        _, output, errors, _, _ = invoke(["status"], error)
-        self.assertNotIn("secret", output + errors)
-        project = Path(__file__).parents[1]
-        with (project / "pyproject.toml").open("rb") as file:
-            self.assertEqual("limitora.cli:console_main", tomllib.load(file)["project"]["scripts"]["limitora"])
-        import limitora
-        self.assertNotIn("cli", limitora.__all__)
-        source = (project / "src/limitora/cli/__init__.py").read_text()
-        for forbidden in ("argparse", "subprocess", "import os", "pathlib", "StatusProvider"):
-            self.assertNotIn(forbidden, source)
-
-    def test_cli_module_delegates_human_rendering_to_output(self):
-        project = Path(__file__).parents[1]
-        source = (project / "src/limitora/cli/__init__.py").read_text()
-
-        self.assertIn("from limitora.output import render_human", source)
-        for forbidden in (
-            "def _render_snapshot",
-            "def _render_usage",
-            "def _render_error",
-            "def _timestamp",
-            "def _optional",
-            "def _quantity",
-        ):
-            with self.subTest(symbol=forbidden):
-                self.assertNotIn(forbidden, source)
 
 
 if __name__ == "__main__": unittest.main()
