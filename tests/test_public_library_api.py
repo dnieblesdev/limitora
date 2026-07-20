@@ -114,7 +114,7 @@ class PublicLibraryApiTests(unittest.TestCase):
         self.assertEqual(expected_exports, set(limitora.__all__))
         for symbol in expected_exports:
             self.assertIsNotNone(getattr(limitora, symbol))
-        for unsupported in ("ProviderReader", "StatusService", "cli", "json"):
+        for unsupported in ("ProviderReader", "StatusService", "cli", "json", "output"):
             self.assertNotIn(unsupported, limitora.__all__)
 
     def test_current_clock_is_timezone_aware_and_default_client_is_usable(self) -> None:
