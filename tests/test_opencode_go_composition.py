@@ -1,6 +1,7 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 from io import StringIO
+from unittest.mock import patch
 
 import limitora
 from limitora import AuthorizationPolicy, Freshness, FreshnessPolicy, MetricKind, StatusRequest, StatusSnapshotResult
@@ -78,6 +79,117 @@ class OpenCodeGoCompositionTests(unittest.TestCase):
         source = "\n".join((root / name).read_text() for name in ("_opencode_go.py", "_opencode_go_httpx.py"))
         for forbidden in ("subprocess", "os.environ", "logging", "node", "cookiejar"):
             self.assertNotIn(forbidden, source.lower())
+
+    def test_full_cli_path_opencode_go_writes_json_document_to_stdout(self):
+        """End-to-end: argv -> activate_provider -> read_status -> render_json on stdout."""
+        from limitora.providers import _opencode_go_httpx
+
+        captured = []
+
+        class StubTransport:
+            def __init__(self, config, **_):
+                captured.append(config)
+
+            def fetch(self):
+                return HttpResponse(
+                    200,
+                    b'{"rollingUsage":{"usagePercent":25,"resetInSec":10},'
+                    b'"weeklyUsage":{"usagePercent":10,"resetInSec":100},'
+                    b'"monthlyUsage":{"usagePercent":5,"resetInSec":1000}}',
+                )
+
+        with patch.object(_opencode_go_httpx, "_HttpxOpenCodeGoTransport", StubTransport):
+            output, errors = StringIO(), StringIO()
+            code = main(
+                [
+                    "status", "--json", "--provider", "opencode-go",
+                    "--workspace-id", "ws1", "--auth-cookie", "c1",
+                    "--opencode-allow-authorized-source",
+                ],
+                stdout=output, stderr=errors,
+            )
+            out_text = output.getvalue()
+            err_text = errors.getvalue()
+
+        self.assertEqual(0, code)
+        self.assertEqual("", err_text)
+        self.assertIn('"result": "snapshot"', out_text)
+        self.assertIn('"version": 1', out_text)
+        self.assertIn('"freshness": "fresh"', out_text)
+        self.assertTrue(out_text.endswith("\n"))
+        # The transport received the parsed config
+        self.assertEqual(1, len(captured))
+        self.assertEqual("ws1", captured[0].workspace_id)
+        self.assertEqual("c1", captured[0].auth_cookie)
+        self.assertEqual("https://opencode.ai", captured[0].endpoint)
+
+    def test_full_cli_path_opencode_go_human_mode_renders_human(self):
+        """End-to-end: argv -> activate_provider -> read_status -> render_human on stdout."""
+        from limitora.providers import _opencode_go_httpx
+
+        class StubTransport:
+            def __init__(self, config, **_):
+                pass
+
+            def fetch(self):
+                return HttpResponse(
+                    200,
+                    b'{"rollingUsage":{"usagePercent":25,"resetInSec":10},'
+                    b'"weeklyUsage":{"usagePercent":10,"resetInSec":100},'
+                    b'"monthlyUsage":{"usagePercent":5,"resetInSec":1000}}',
+                )
+
+        with patch.object(_opencode_go_httpx, "_HttpxOpenCodeGoTransport", StubTransport):
+            output, errors = StringIO(), StringIO()
+            code = main(
+                [
+                    "status", "--provider", "opencode-go",
+                    "--workspace-id", "ws1", "--auth-cookie", "c1",
+                    "--opencode-allow-authorized-source",
+                ],
+                stdout=output, stderr=errors,
+            )
+            out_text = output.getvalue()
+            err_text = errors.getvalue()
+
+        self.assertEqual(0, code)
+        self.assertEqual("", err_text)
+        self.assertIn("RESULT: snapshot", out_text)
+        self.assertIn("PROVIDER: opencode-go", out_text)
+
+    def test_full_cli_path_opencode_go_authorization_default_is_deny(self):
+        """End-to-end: without --opencode-allow-authorized-source, default DENY is honored."""
+        from limitora.providers import _opencode_go_httpx
+
+        class StubTransport:
+            def __init__(self, config, **_):
+                pass
+
+            def fetch(self):
+                return HttpResponse(
+                    200,
+                    b'{"rollingUsage":{"usagePercent":25,"resetInSec":10},'
+                    b'"weeklyUsage":{"usagePercent":10,"resetInSec":100},'
+                    b'"monthlyUsage":{"usagePercent":5,"resetInSec":1000}}',
+                )
+
+        with patch.object(_opencode_go_httpx, "_HttpxOpenCodeGoTransport", StubTransport):
+            output, errors = StringIO(), StringIO()
+            code = main(
+                [
+                    "status", "--json", "--provider", "opencode-go",
+                    "--workspace-id", "ws1", "--auth-cookie", "c1",
+                ],
+                stdout=output, stderr=errors,
+            )
+            out_text = output.getvalue()
+            err_text = errors.getvalue()
+
+        # Without --opencode-allow-authorized-source, the provider rejects
+        # with UNAUTHORIZED before calling the transport.
+        self.assertEqual(5, code)
+        self.assertEqual("", err_text)
+        self.assertIn('"kind": "unauthorized"', out_text)
 
 
 if __name__ == "__main__":

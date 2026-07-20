@@ -49,6 +49,11 @@ class Transport:
     def fetch(self):
         self.calls += 1
         return self.response
+
+
+class _StubTransport:
+    def fetch(self):
+        return None
 def codex_payload():
     return {
         "rateLimits": {
@@ -273,25 +278,49 @@ class ActivateProviderTests(unittest.TestCase):
             )
         self.assertEqual([], session_calls)
 
-    def test_opencode_go_branch_raises_invalid_in_wu1(self):
-        with self.assertRaises(CompositionError) as raised:
-            activate_provider(OpenCodeGoConfig("workspace", "opaque"))
-        self.assertEqual(CompositionErrorKind.INVALID, raised.exception.kind)
-        self.assertEqual("provider composition input is invalid", raised.exception.safe_message)
+    def test_opencode_go_builds_status_client_with_httpx_transport(self):
+        from limitora.providers._opencode_go_httpx import _HttpxOpenCodeGoTransport
 
-    def test_opencode_go_branch_does_not_import_httpx(self):
+        client = activate_provider(OpenCodeGoConfig("workspace", "opaque"), clock=FixedClock())
+        self.assertIsInstance(client, StatusClient)
+        provider = client._service._provider
+        self.assertIsInstance(provider._transport, _HttpxOpenCodeGoTransport)
+
+    def test_opencode_go_constructs_with_injected_clock(self):
+        clock = FixedClock()
+        client = activate_provider(OpenCodeGoConfig("workspace", "opaque"), clock=clock)
+        self.assertIs(client._clock, clock)
+
+    def test_opencode_go_uses_current_clock_by_default(self):
+        from limitora.api import CurrentClock
+
+        client = activate_provider(OpenCodeGoConfig("workspace", "opaque"))
+        self.assertIsInstance(client._clock, CurrentClock)
+
+    def test_opencode_go_does_not_import_httpx_at_construction(self):
         import sys
 
         saved_httpx = sys.modules.pop("httpx", None)
         try:
-            try:
-                activate_provider(OpenCodeGoConfig("workspace", "opaque"))
-            except CompositionError:
-                pass
+            activate_provider(OpenCodeGoConfig("workspace", "opaque"), clock=FixedClock())
             self.assertNotIn("httpx", sys.modules)
         finally:
             if saved_httpx is not None:
                 sys.modules["httpx"] = saved_httpx
+
+    def test_opencode_go_factory_invoked_once_per_transport_creation(self):
+        from limitora.composition import OpenCodeGoDependencies, build_status_client
+
+        transport_calls = []
+
+        def transport_factory(config):
+            transport_calls.append(config)
+            return _StubTransport()
+
+        deps = OpenCodeGoDependencies(FixedClock(), transport_factory)
+        with self.assertRaises(CompositionError):
+            build_status_client(OpenCodeGoConfig("workspace", "opaque"), deps, enabled=False)
+        self.assertEqual([], transport_calls)
 
     def test_unknown_config_raises_invalid(self):
         class Third(CodexJsonlConfig):

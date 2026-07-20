@@ -145,18 +145,22 @@ def activate_provider(
     :func:`build_status_client`. The CLI calls this helper exclusively; it
     never imports ``_codex_jsonl`` or ``_opencode_go_httpx`` directly.
 
-    The Codex branch lazily imports ``_codex_jsonl`` so the module can be
-    imported without a working ``subprocess`` environment. The OpenCode Go
-    branch is intentionally left as an ``INVALID`` fallthrough in the first
-    work unit; the OpenCode Go activation is shipped in a follow-up work
-    unit that fills this branch with the lazy ``_opencode_go_httpx`` import.
+    Both adapter modules are imported lazily so that ``composition`` can be
+    loaded without a working ``subprocess`` environment (Codex) and without
+    the optional ``httpx`` dependency installed (OpenCode Go). The
+    ``_HttpxOpenCodeGoTransport`` constructor does not touch ``httpx``; the
+    lazy import stays inside :meth:`_HttpxOpenCodeGoTransport.fetch` so the
+    CLI may be used in environments where ``httpx`` is absent.
     """
     resolved_clock = CurrentClock() if clock is None else clock
     if type(config) is CodexJsonlConfig:
         from .providers._codex_jsonl import _CodexJsonlSession
         dependencies = CodexJsonlDependencies(resolved_clock, lambda: _CodexJsonlSession())
     elif type(config) is OpenCodeGoConfig:
-        _fail(CompositionErrorKind.INVALID)
+        from .providers._opencode_go_httpx import _HttpxOpenCodeGoTransport
+        dependencies = OpenCodeGoDependencies(
+            resolved_clock, lambda cfg: _HttpxOpenCodeGoTransport(cfg)
+        )
     else:
         _fail(CompositionErrorKind.INVALID)
     return build_status_client(config, dependencies, enabled=enabled)
