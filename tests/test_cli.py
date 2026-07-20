@@ -111,5 +111,21 @@ class CliTests(unittest.TestCase):
         for forbidden in ("argparse", "subprocess", "import os", "pathlib", "StatusProvider"):
             self.assertNotIn(forbidden, source)
 
+    def test_cli_module_delegates_human_rendering_to_output(self):
+        project = Path(__file__).parents[1]
+        source = (project / "src/limitora/cli/__init__.py").read_text()
+
+        self.assertIn("from limitora.output import render_human", source)
+        for forbidden in (
+            "def _render_snapshot",
+            "def _render_usage",
+            "def _render_error",
+            "def _timestamp",
+            "def _optional",
+            "def _quantity",
+        ):
+            with self.subTest(symbol=forbidden):
+                self.assertNotIn(forbidden, source)
+
 
 if __name__ == "__main__": unittest.main()

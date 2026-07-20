@@ -25,7 +25,7 @@ from limitora import (
     StatusUndetectedResult,
 )
 from limitora.models import Quantity, QuotaWindow, UsageSnapshot, ValueAvailability, WindowKind
-from limitora.output import render_json
+from limitora.output import render_human, render_json
 
 
 UTC = timezone.utc
@@ -229,6 +229,85 @@ class DeterminismTests(unittest.TestCase):
         )
 
         self.assertEqual(render_json(error), render_json(error))
+
+
+class RenderHumanByteIdentityTests(unittest.TestCase):
+    """render_human output is byte-identical to the current CLI renderers."""
+
+    def test_render_human_fresh_empty_snapshot_matches_pinned_cli_output(self) -> None:
+        rendered = render_human(snapshot())
+
+        self.assertEqual(
+            "RESULT: snapshot\nPROVIDER: fixture-provider\nSTATE: available\n"
+            "STATUS_OBSERVED_AT: 2026-07-15T12:00:00Z\nFRESHNESS: fresh\n"
+            "FETCHED_AT: 2026-07-15T12:00:00Z\nDATA_AT: 2026-07-15T11:00:00Z\n"
+            "SOURCE: offline-fixture\nQUOTA_WINDOWS: unavailable\nUSAGE: unavailable\n",
+            rendered,
+        )
+
+    def test_render_human_snapshot_with_windows_and_usage_matches_pinned_cli_output(self) -> None:
+        offset = timezone(timedelta(hours=2))
+        known = QuotaWindow(
+            kind=WindowKind.COMMERCIAL_QUOTA,
+            scope="z",
+            period="month",
+            plan_id="pro",
+            availability=ValueAvailability.KNOWN,
+            source=SourceMetadata("quota"),
+            limit=Quantity(Decimal("10"), MetricKind.COMMERCIAL_QUOTA, "requests"),
+            used=Quantity(Decimal("4"), MetricKind.COMMERCIAL_QUOTA, "requests"),
+            remaining=Quantity(Decimal("6"), MetricKind.COMMERCIAL_QUOTA, "requests"),
+            reset_at=TIME,
+        )
+        unavailable = QuotaWindow(
+            kind=WindowKind.OTHER,
+            scope="a",
+            period="day",
+            plan_id=None,
+            availability=ValueAvailability.UNKNOWN,
+            source=SourceMetadata("missing"),
+        )
+        usage = UsageSnapshot(
+            provider_id=PROVIDER,
+            observed_at=datetime(2026, 7, 15, 14, tzinfo=offset),
+            availability=ValueAvailability.KNOWN,
+            source=SourceMetadata("usage"),
+            token_limit=Quantity(Decimal("20"), MetricKind.TOKENS, "tokens"),
+        )
+
+        rendered = render_human(snapshot(windows=(known, unavailable), usage=usage))
+
+        self.assertTrue(rendered.startswith("RESULT: snapshot\nPROVIDER: fixture-provider\n"))
+        self.assertLess(rendered.index("KIND: commercial_quota"), rendered.index("KIND: other"))
+        self.assertIn(
+            "  PLAN_ID: unavailable\n  AVAILABILITY: unknown\n  SOURCE: missing\n  LIMIT: unavailable",
+            rendered,
+        )
+        self.assertIn("RESET_AT: 2026-07-15T12:00:00Z", rendered)
+        self.assertIn(
+            "USAGE:\n  OBSERVED_AT: 2026-07-15T12:00:00Z\n  AVAILABILITY: known",
+            rendered,
+        )
+        self.assertTrue(rendered.endswith("\n"))
+        self.assertNotIn("%", rendered)
+
+    def test_render_human_undetected_matches_pinned_cli_output(self) -> None:
+        rendered = render_human(StatusUndetectedResult())
+
+        self.assertEqual("RESULT: undetected\nSTATUS: unavailable\n", rendered)
+
+    def test_render_human_error_matches_pinned_cli_output(self) -> None:
+        error = ProviderError(
+            ProviderErrorKind.UNAUTHORIZED, PROVIDER, "safe failure", retryable=False,
+        )
+
+        rendered = render_human(error)
+
+        self.assertEqual(
+            "ERROR: provider\nPROVIDER: fixture-provider\nKIND: unauthorized\n"
+            "MESSAGE: safe failure\nRETRYABLE: false\n",
+            rendered,
+        )
 
 
 if __name__ == "__main__":

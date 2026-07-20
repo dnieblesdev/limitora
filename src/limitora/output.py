@@ -2,8 +2,9 @@
 
 Renders a :class:`limitora.api.StatusSnapshotResult`,
 :class:`limitora.api.StatusUndetectedResult`, or
-:class:`limitora.providers.ProviderError` into the versioned JSON v1 envelope
-documented in ``docs/architecture/output-contracts.md``.
+:class:`limitora.providers.ProviderError` into either the versioned JSON v1
+envelope or the human-readable CLI string documented in
+``docs/architecture/output-contracts.md``.
 
 The module consumes only the public types from ``limitora.api``,
 ``limitora.models``, and ``limitora.providers``. It is intentionally not
@@ -22,6 +23,7 @@ from limitora.providers import ProviderError
 
 
 JSONContractVersion = 1
+_UNAVAILABLE = "unavailable"
 
 
 def isoformat_utc(value: datetime) -> str:
@@ -142,3 +144,85 @@ def render_json(
     else:
         raise TypeError(f"unsupported result type: {type(result).__name__}")
     return json.dumps(_ordered(payload), sort_keys=False, allow_nan=False)
+
+
+def _human_optional(value: object | None) -> str:
+    return _UNAVAILABLE if value is None else str(value)
+
+
+def _human_quantity(value: Quantity | None) -> str:
+    return _UNAVAILABLE if value is None else f"{value.value} {value.unit}"
+
+
+def _render_human_usage(usage: UsageSnapshot | None) -> list[str]:
+    if usage is None:
+        return ["USAGE: unavailable"]
+    return [
+        "USAGE:",
+        f"  OBSERVED_AT: {isoformat_utc(usage.observed_at)}",
+        f"  AVAILABILITY: {usage.availability.value}",
+        f"  SOURCE: {usage.source.reference}",
+        f"  TOKEN_LIMIT: {_human_quantity(usage.token_limit)}",
+        f"  TOKEN_USED: {_human_quantity(usage.token_used)}",
+        f"  BALANCE: {_human_quantity(usage.balance)}",
+    ]
+
+
+def _render_human_snapshot(result: StatusSnapshotResult) -> str:
+    snapshot = result.snapshot
+    lines = [
+        "RESULT: snapshot",
+        f"PROVIDER: {snapshot.provider_id.value}",
+        f"STATE: {snapshot.status.state.value}",
+        f"STATUS_OBSERVED_AT: {isoformat_utc(snapshot.status.observed_at)}",
+        f"FRESHNESS: {result.freshness.value}",
+        f"FETCHED_AT: {isoformat_utc(snapshot.fetched_at)}",
+        f"DATA_AT: {isoformat_utc(snapshot.data_at)}",
+        f"SOURCE: {snapshot.source.reference}",
+    ]
+    windows = sorted(
+        snapshot.quota_windows,
+        key=lambda window: (window.kind.value, window.scope, window.period, window.plan_id or ""),
+    )
+    if not windows:
+        lines.append("QUOTA_WINDOWS: unavailable")
+    else:
+        lines.append("QUOTA_WINDOWS:")
+        for window in windows:
+            lines.extend((
+                f"  KIND: {window.kind.value}",
+                f"  SCOPE: {window.scope}",
+                f"  PERIOD: {window.period}",
+                f"  PLAN_ID: {_human_optional(window.plan_id)}",
+                f"  AVAILABILITY: {window.availability.value}",
+                f"  SOURCE: {window.source.reference}",
+                f"  LIMIT: {_human_quantity(window.limit)}",
+                f"  USED: {_human_quantity(window.used)}",
+                f"  REMAINING: {_human_quantity(window.remaining)}",
+                f"  RESET_AT: {_UNAVAILABLE if window.reset_at is None else isoformat_utc(window.reset_at)}",
+            ))
+    lines.extend(_render_human_usage(snapshot.usage))
+    return "\n".join(lines) + "\n"
+
+
+def _render_human_error(error: ProviderError) -> str:
+    return "\n".join((
+        "ERROR: provider",
+        f"PROVIDER: {error.provider_id.value}",
+        f"KIND: {error.kind.value}",
+        f"MESSAGE: {error.safe_message}",
+        f"RETRYABLE: {str(error.retryable).lower()}",
+    )) + "\n"
+
+
+def render_human(
+    result: StatusSnapshotResult | StatusUndetectedResult | ProviderError,
+) -> str:
+    """Render a public result as a human-readable string, byte-identical to the legacy CLI."""
+    if isinstance(result, StatusSnapshotResult):
+        return _render_human_snapshot(result)
+    if isinstance(result, StatusUndetectedResult):
+        return "RESULT: undetected\nSTATUS: unavailable\n"
+    if isinstance(result, ProviderError):
+        return _render_human_error(result)
+    raise TypeError(f"unsupported result type: {type(result).__name__}")
