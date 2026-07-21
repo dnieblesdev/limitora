@@ -62,6 +62,27 @@ class CodexProviderTests(unittest.TestCase):
         self.assertFalse(raised.exception.retryable)
         self.assertEqual([], session.calls)
 
+    def test_version_plumbing_passes_client_version_into_session_spec(self):
+        from importlib import metadata
+        provider, session = self.provider(payload(window(300, 5)))
+        provider.fetch(request())
+        self.assertEqual(1, len(session.calls))
+        spec = session.calls[0]
+        try:
+            expected = metadata.version("limitora")
+        except metadata.PackageNotFoundError:
+            expected = "0.0.0+unknown"
+        self.assertEqual(expected, spec.client_version)
+
+    def test_version_plumbing_uses_safe_sentinel_when_metadata_is_absent(self):
+        from unittest import mock
+        from limitora.providers import codex as codex_module
+        provider, session = self.provider(payload(window(300, 5)))
+        with mock.patch.object(codex_module, "_client_version", return_value="0.0.0+unknown"):
+            provider.fetch(request())
+        self.assertEqual(1, len(session.calls))
+        self.assertEqual("0.0.0+unknown", session.calls[0].client_version)
+
     def test_full_mapping_uses_percentage_points_and_utc_resets(self):
         provider, session = self.provider(payload(window(300, 25), window(10080, 60)))
         snapshot = provider.fetch(request())
