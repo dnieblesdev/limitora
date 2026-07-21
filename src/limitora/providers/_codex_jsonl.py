@@ -1,9 +1,17 @@
-"""Private bounded JSONL transport for the Codex app-server handshake."""
+"""Private bounded JSONL transport for the Codex app-server handshake.
+
+The failure vocabulary (``_CodexJsonlFailure`` /
+``_CodexJsonlFailureKind``) is now owned by the
+:mod:`limitora.providers._codex_jsonl_protocol` module so it can be
+reused by the transport and mapping layers without circular imports.
+The names are re-exported here so existing
+``from ._codex_jsonl import _CodexJsonlFailure`` call sites keep
+working byte-identically.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import timedelta
-from enum import Enum
 import json
 import os
 import select
@@ -11,23 +19,7 @@ import subprocess
 import time
 from typing import Callable, Protocol
 
-
-class _CodexJsonlFailureKind(str, Enum):
-    NOT_CONFIGURED = "not_configured"
-    TIMEOUT = "timeout"
-    OUTPUT_LIMIT = "output_limit"
-    PROTOCOL = "protocol"
-    UNAUTHORIZED = "unauthorized"
-    RATE_LIMITED = "rate_limited"
-    UNAVAILABLE = "unavailable"
-    PROCESS = "process"
-
-
-class _CodexJsonlFailure(Exception):
-    def __init__(self, kind: _CodexJsonlFailureKind) -> None:
-        self.kind = kind
-        self.safe_message = "Codex JSONL transport " + kind.value.replace("_", " ")
-        super().__init__(self.safe_message)
+from ._codex_jsonl_protocol import _CodexJsonlFailure, _CodexJsonlFailureKind
 
 
 @dataclass(frozen=True)
