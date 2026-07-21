@@ -1,4 +1,9 @@
-"""Mapping session: protocol + transport orchestration for the Codex app-server handshake."""
+"""Mapping session: protocol + transport orchestration for the Codex app-server handshake.
+
+Composes a bounded transport reader and a pure protocol codec to run
+the corrected handshake: initialize (id 1), ``initialized`` notification,
+``account/rateLimits/read`` (id 2). Notifications are silently skipped.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -41,6 +46,8 @@ _ERROR_CODE_KIND = {
 
 @dataclass(frozen=True)
 class _CodexSessionSpec:
+    """Bounded configuration for one ``_CodexJsonlSession.exchange`` call."""
+
     runner: tuple[str, ...]
     timeout: timedelta
     max_output_bytes: int
@@ -55,6 +62,8 @@ class _CodexSessionSpec:
 
 
 class _CodexJsonlSession:
+    """The mapping session that orchestrates protocol + transport."""
+
     def __init__(
         self,
         factory: Optional[_ProcessFactory] = None,
@@ -113,6 +122,7 @@ class _CodexJsonlSession:
         cap: int,
         ident: int,
     ) -> _ParsedFrame:
+        """Read frames until the correlated ``ident`` arrives. Skips notifications; maps error codes via ``_ERROR_CODE_KIND``."""
         reader = _BoundedLineReader(
             process,
             deadline=deadline,
