@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from importlib import metadata
 from os.path import isabs
 
 from limitora.models import (MetricKind, ProviderId, ProviderSnapshot, ProviderState, ProviderStatus,
@@ -17,6 +18,22 @@ _PROVIDER_ID = ProviderId("codex")
 _SOURCE = SourceMetadata("codex-app-server-v2")
 _SUPPORTED_PLANS = frozenset({"free", "plus", "pro", "team", "business", "enterprise", "edu"})
 _PERIODS = {300: "five_hour", 10080: "weekly"}
+_FALLBACK_CLIENT_VERSION = "0.0.0+unknown"
+
+
+def _client_version() -> str:
+    """Resolve the limitora version for the ``clientInfo.version`` handshake.
+
+    Returns the package metadata version when available, or a stable
+    sentinel when the package is installed in editable mode without
+    a ``.dist-info`` directory (the typical case during development).
+    The sentinel is non-empty and stripped so the ``_CodexSessionSpec``
+    validation accepts it.
+    """
+    try:
+        return metadata.version("limitora")
+    except metadata.PackageNotFoundError:
+        return _FALLBACK_CLIENT_VERSION
 
 
 class _MappingError(Exception):
@@ -43,7 +60,7 @@ class CodexProvider:
         if request.authorization_policy is AuthorizationPolicy.DENY_AUTHORIZED_SOURCE:
             raise self._failure(ProviderErrorKind.UNAUTHORIZED, False)
         try:
-            payload = self._session.exchange(_CodexSessionSpec(self._runner, timedelta(seconds=5), 65_536, timedelta(seconds=1)))
+            payload = self._session.exchange(_CodexSessionSpec(self._runner, timedelta(seconds=5), 65_536, timedelta(seconds=1), _client_version()))
         except _CodexJsonlFailure as error:
             raise self._transport_failure(error.kind) from None
         return self._snapshot(payload)

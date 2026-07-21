@@ -1,4 +1,10 @@
-"""Mapping session contract tests for the Codex JSONL handshake."""
+"""Mapping session tests for the Codex JSONL transport.
+
+The 7 contract rows the spec mandates for the refactored
+``_CodexJsonlSession``: (a) sequence, (b) notification skip,
+(c) multiple notifications, (d) unknown id, (e) clientInfo.version,
+(f) trailing data, (g) no ``jsonrpc`` in outbound frames.
+"""
 from __future__ import annotations
 
 from datetime import timedelta
