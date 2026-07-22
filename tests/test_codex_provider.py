@@ -26,15 +26,13 @@ def request(policy=AuthorizationPolicy.ALLOW_AUTHORIZED_SOURCE):
 
 
 def payload(primary=None, secondary=None, **extra):
-    limits = {"planType": "pro"}
-    if primary is not None: limits["primary"] = primary
-    if secondary is not None: limits["secondary"] = secondary
+    limits = {"limitId": "codex", "planType": "pro", "primary": primary, "secondary": secondary}
     limits.update(extra)
     return {"rateLimits": limits}
 
 
 def window(duration, used, reset=1_800_000_000):
-    value = {"limitId": "codex", "windowDurationMins": duration, "usedPercent": used}
+    value = {"windowDurationMins": duration, "usedPercent": used}
     if reset != "missing": value["resetsAt"] = reset
     return value
 
@@ -83,7 +81,7 @@ class CodexProviderTests(unittest.TestCase):
         self.assertEqual(1, len(session.calls))
         self.assertEqual("0.0.0+unknown", session.calls[0].client_version)
 
-    def test_full_mapping_uses_percentage_points_and_utc_resets(self):
+    def test_snapshot_limit_id_maps_windows_without_nested_limit_id(self):
         provider, session = self.provider(payload(window(300, 25), window(10080, 60)))
         snapshot = provider.fetch(request())
         self.assertEqual(ProviderState.AVAILABLE, snapshot.status.state)
@@ -93,6 +91,32 @@ class CodexProviderTests(unittest.TestCase):
                          (five_hour.period, five_hour.limit.value, five_hour.used.value, five_hour.remaining.value, five_hour.unit))
         self.assertEqual(("weekly", 100, 60, 40), (weekly.period, weekly.limit.value, weekly.used.value, weekly.remaining.value))
         self.assertEqual(("pro", timezone.utc), (five_hour.plan_id, five_hour.reset_at.tzinfo))
+
+    def test_weekly_primary_with_null_secondary_maps_partial_snapshot(self):
+        provider, _ = self.provider(payload(window(10080, 60), secondary=None))
+        snapshot = provider.fetch(request())
+        self.assertEqual(ProviderState.PARTIAL, snapshot.status.state)
+        self.assertEqual(1, len(snapshot.quota_windows))
+        self.assertEqual("weekly", snapshot.quota_windows[0].period)
+
+    def test_missing_or_wrong_snapshot_limit_id_is_unsupported(self):
+        missing = payload(window(300, 1))
+        del missing["rateLimits"]["limitId"]
+        for data in (missing, payload(window(300, 1), limitId="other")):
+            with self.subTest(data=data):
+                provider, _ = self.provider(data)
+                with self.assertRaises(ProviderError) as raised:
+                    provider.fetch(request())
+                self.assertEqual(ProviderErrorKind.UNSUPPORTED, raised.exception.kind)
+
+    def test_nested_legacy_limit_id_does_not_replace_snapshot_limit_id(self):
+        data = payload(window(300, 1))
+        del data["rateLimits"]["limitId"]
+        data["rateLimits"]["primary"]["limitId"] = "codex"
+        provider, _ = self.provider(data)
+        with self.assertRaises(ProviderError) as raised:
+            provider.fetch(request())
+        self.assertEqual(ProviderErrorKind.UNSUPPORTED, raised.exception.kind)
 
     def test_partial_mapping_keeps_missing_or_null_reset_absent(self):
         provider, _ = self.provider(payload(window(300, 1, "missing"), window(10080, 101)))
@@ -130,7 +154,6 @@ class CodexProviderTests(unittest.TestCase):
             (payload(window(300, 1), planType=None), ProviderErrorKind.UNSUPPORTED),
             (payload([]), ProviderErrorKind.UNSUPPORTED),
             (payload(window(300, 1), planType="pro "), ProviderErrorKind.UNSUPPORTED),
-            (payload({"limitId": "other", "windowDurationMins": 300, "usedPercent": 1}), ProviderErrorKind.UNSUPPORTED),
             (payload(window(60, 1)), ProviderErrorKind.UNSUPPORTED),
             (payload(window(300, 1), window(300, 2)), ProviderErrorKind.UNSUPPORTED),
             ({"rateLimits": {"credits": {"secret": 1}}}, ProviderErrorKind.UNSUPPORTED),

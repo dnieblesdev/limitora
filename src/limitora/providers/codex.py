@@ -69,6 +69,7 @@ class CodexProvider:
         try:
             rate_limits = payload["rateLimits"] if isinstance(payload, dict) else None
             if not isinstance(rate_limits, dict): raise _MappingError(ProviderErrorKind.UNSUPPORTED)
+            if rate_limits.get("limitId") != "codex": raise _MappingError(ProviderErrorKind.UNSUPPORTED)
             plan = rate_limits.get("planType")
             if not isinstance(plan, str) or plan.strip() != plan or plan not in _SUPPORTED_PLANS:
                 raise _MappingError(ProviderErrorKind.UNSUPPORTED)
@@ -91,7 +92,6 @@ class CodexProvider:
     @staticmethod
     def _window(raw: object, plan: str) -> QuotaWindow:
         if not isinstance(raw, dict): raise _MappingError(ProviderErrorKind.UNSUPPORTED)
-        if raw.get("limitId") != "codex": raise _MappingError(ProviderErrorKind.UNSUPPORTED)
         duration, used = raw.get("windowDurationMins"), raw.get("usedPercent")
         if type(duration) is not int or duration not in _PERIODS: raise _MappingError(ProviderErrorKind.UNSUPPORTED)
         if type(used) is not int or not 0 <= used <= 100: raise _MappingError(ProviderErrorKind.PARSE_FAILED)
