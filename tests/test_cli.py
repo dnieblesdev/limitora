@@ -29,7 +29,7 @@ EXPECTED_REQUEST = StatusRequest(
     AuthorizationPolicy.DENY_AUTHORIZED_SOURCE,
     FreshnessPolicy(timedelta(minutes=5)),
 )
-CODEX_RUNNER = ("/declared/codex", "run")
+CODEX_RUNNER = ("/declared/codex", "app-server", "--stdio")
 
 
 def snapshot(*, freshness=Freshness.FRESH, windows=(), usage=None):
@@ -95,6 +95,7 @@ class HelpAndUnconfiguredTests(unittest.TestCase):
         self.assertIn("--auth-cookie", _HELP)
         self.assertIn("--timeout", _HELP)
         self.assertIn("--endpoint", _HELP)
+        self.assertIn("app-server --stdio", _HELP)
 
     def test_no_flags_routes_to_unconfigured_stderr_and_exit_four(self):
         code, output, errors, _, _ = invoke(["status"])
@@ -185,11 +186,20 @@ class InvalidGrammarTests(unittest.TestCase):
         self.assertEqual("", output)
         self.assertIn("requires a value", errors)
 
-    def test_runner_followed_by_flag_is_usage_error(self):
-        code, output, errors, _, _ = invoke(["status", "--provider", "codex", "--runner", "--json"])
-        self.assertEqual(2, code)
-        self.assertEqual("", output)
-        self.assertIn("requires a value", errors)
+    def test_runner_followed_by_known_limitora_flag_is_usage_error(self):
+        known_flags = (
+            "--help", "--json", "--codex-allow-authorized-source",
+            "--opencode-allow-authorized-source", "--provider", "--runner",
+            "--workspace-id", "--auth-cookie", "--endpoint", "--timeout",
+        )
+        for flag in known_flags:
+            with self.subTest(flag=flag):
+                code, output, errors, _, _ = invoke([
+                    "status", "--provider", "codex", "--runner", flag,
+                ])
+                self.assertEqual(2, code)
+                self.assertEqual("", output)
+                self.assertIn("requires a value", errors)
 
     def test_unexpected_positional_is_usage_error(self):
         for argv in (["status", "extra"], ["status", "status"]):
@@ -256,9 +266,20 @@ class ParseUnitTests(unittest.TestCase):
         self.assertIsNone(intent.provider)
 
     def test_parse_codex_with_repeated_runner_builds_tuple(self):
-        intent = parse(["status", "--provider", "codex", "--runner", "/bin/sh", "--runner", "-c"])
+        intent = parse([
+            "status", "--provider", "codex", "--runner", "/bin/codex",
+            "--runner", "app-server", "--runner", "--stdio",
+        ])
         self.assertEqual("codex", intent.provider)
-        self.assertEqual(("/bin/sh", "-c"), intent.codex.runner)
+        self.assertEqual(("/bin/codex", "app-server", "--stdio"), intent.codex.runner)
+
+    def test_parse_explicit_codex_runner_coexists_with_json(self):
+        intent = parse([
+            "status", "--provider", "codex", "--runner", "/bin/codex",
+            "--runner", "app-server", "--runner", "--stdio", "--json",
+        ])
+        self.assertTrue(intent.json_requested)
+        self.assertEqual(("/bin/codex", "app-server", "--stdio"), intent.codex.runner)
 
     def test_parse_opencode_uses_defaults(self):
         intent = parse([
@@ -307,6 +328,16 @@ class ParseUnitTests(unittest.TestCase):
 
 
 class IntentToConfigUnitTests(unittest.TestCase):
+    def test_single_absolute_codex_runner_adds_app_server_stdio_defaults(self):
+        intent = CliIntent(
+            provider="codex",
+            codex=CodexIntent(runner=("/declared/codex",)),
+        )
+
+        config = intent_to_config(intent)
+
+        self.assertEqual(CodexJsonlConfig(runner=CODEX_RUNNER), config)
+
     def test_codex_intent_maps_to_codex_config(self):
         intent = CliIntent(
             provider="codex",
@@ -314,6 +345,13 @@ class IntentToConfigUnitTests(unittest.TestCase):
         )
         config = intent_to_config(intent)
         self.assertEqual(CodexJsonlConfig(runner=CODEX_RUNNER), config)
+
+    def test_single_relative_codex_runner_is_not_expanded(self):
+        intent = CliIntent(provider="codex", codex=CodexIntent(runner=("codex",)))
+
+        config = intent_to_config(intent)
+
+        self.assertEqual(CodexJsonlConfig(runner=("codex",)), config)
 
     def test_opencode_intent_maps_to_opencode_config(self):
         intent = CliIntent(
@@ -348,6 +386,7 @@ class CodexActivationTests(unittest.TestCase):
         self.assertEqual("", errors)
         self.assertIn("RESULT: snapshot", output)
         mock_activate.assert_called_once()
+        self.assertEqual(CODEX_RUNNER, mock_activate.call_args.args[0].runner)
         self.assertIs(client, fake)
 
     def test_authorization_defaults_to_deny_for_codex(self):
@@ -379,8 +418,11 @@ class CodexActivationTests(unittest.TestCase):
 class JsonRoutingTests(unittest.TestCase):
     def test_json_ok_status_writes_json_document(self):
         fake = FakeClient(snapshot())
-        code, output, errors, _, _ = invoke_with_provider(
-            ["status", "--json", "--provider", "codex", "--runner", "/declared/codex"],
+        code, output, errors, _, mock_activate = invoke_with_provider(
+            [
+                "status", "--provider", "codex", "--runner", "/declared/codex",
+                "--runner", "app-server", "--runner", "--stdio", "--json",
+            ],
             fake,
         )
         self.assertEqual(0, code)
@@ -388,6 +430,7 @@ class JsonRoutingTests(unittest.TestCase):
         self.assertIn('"result": "snapshot"', output)
         self.assertIn('"version": 1', output)
         self.assertTrue(output.endswith("\n"))
+        self.assertEqual(CODEX_RUNNER, mock_activate.call_args.args[0].runner)
 
     def test_json_stale_status_writes_document_and_exit_three(self):
         fake = FakeClient(snapshot(freshness=Freshness.STALE))

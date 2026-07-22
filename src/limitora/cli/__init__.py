@@ -11,7 +11,7 @@ Flag grammar (all forms are space-separated, ``--key=value`` is rejected):
 
     limitora status [--help] [--json] [--provider {codex,opencode-go}] [flags]
 
-    codex:        --runner PATH (repeatable)
+    codex:        --runner PATH [--runner ARG ...]
                   [--codex-allow-authorized-source]
     opencode-go:  --workspace-id ID --auth-cookie COOKIE
                   [--endpoint URL] [--timeout SECONDS]
@@ -20,6 +20,7 @@ Flag grammar (all forms are space-separated, ``--key=value`` is rejected):
 
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
+from os.path import isabs
 import sys
 from typing import Literal, Protocol, TextIO
 
@@ -46,7 +47,8 @@ from limitora.providers.ports import Clock
 
 _HELP = (
     "limitora status [--help] [--json] [--provider {codex,opencode-go}] [flags]\n"
-    "  codex:        --runner PATH (repeatable)\n"
+    "  codex:        --runner PATH [--runner ARG ...]\n"
+    "                A single absolute PATH uses 'app-server --stdio'.\n"
     "                [--codex-allow-authorized-source]\n"
     "  opencode-go:  --workspace-id ID --auth-cookie COOKIE\n"
     "                [--endpoint URL] [--timeout SECONDS]\n"
@@ -62,6 +64,7 @@ _VALUE_FLAGS = frozenset({
     "--provider", "--runner",
     "--workspace-id", "--auth-cookie", "--endpoint", "--timeout",
 })
+_KNOWN_FLAGS = _BOOLEAN_FLAGS | _VALUE_FLAGS
 _SINGLETON_VALUE_FLAGS = frozenset({
     "--provider", "--workspace-id", "--auth-cookie", "--endpoint", "--timeout",
 })
@@ -118,22 +121,23 @@ class CliIntent:
     opencode: OpenCodeGoIntent | None = None
 
 
-def _consume_value(argv: list[str], i: int, *, allow_single_dash: bool = False) -> tuple[str | None, int]:
+def _consume_value(argv: list[str], i: int, *, allow_runner_argument: bool = False) -> tuple[str | None, int]:
     """Return ``(value, next_index)`` for the flag at ``argv[i]`` or ``(None, i+1)`` if missing.
 
     By default a value is considered present only when the next token does
-    not start with ``-`` (so an unflagged token is required). When
-    ``allow_single_dash`` is true, a token starting with a single ``-``
-    (e.g. ``-c``) is accepted as a value; a token starting with ``--`` is
-    still rejected because it is a flag.
+    not start with ``-`` (so an unflagged token is required). Runner
+    arguments may start with ``-`` or ``--`` unless they collide with a
+    known Limitora flag.
     """
     next_index = i + 1
     if next_index >= len(argv):
         return None, next_index
     candidate = argv[next_index]
-    if candidate.startswith("--"):
+    if candidate.startswith("--") and (
+        not allow_runner_argument or candidate in _KNOWN_FLAGS
+    ):
         return None, next_index
-    if candidate.startswith("-") and not allow_single_dash:
+    if candidate.startswith("-") and not allow_runner_argument:
         return None, next_index
     return candidate, next_index + 1
 
@@ -192,8 +196,9 @@ def parse(argv: list[str]) -> CliIntent:
             i += 1
             continue
         if token in _VALUE_FLAGS:
-            allow_single_dash = token == "--runner"
-            value, next_i = _consume_value(tokens, i, allow_single_dash=allow_single_dash)
+            value, next_i = _consume_value(
+                tokens, i, allow_runner_argument=token == "--runner"
+            )
             if value is None:
                 raise _usage_error(f"{token} requires a value")
             if token == "--provider":
@@ -278,7 +283,10 @@ def intent_to_config(intent: CliIntent) -> ProviderConfig:
     if intent.provider == "codex":
         if intent.codex is None:  # pragma: no cover - guarded by parse
             raise CompositionError("invalid")
-        return CodexJsonlConfig(runner=intent.codex.runner)
+        runner = intent.codex.runner
+        if len(runner) == 1 and isabs(runner[0]):
+            runner += ("app-server", "--stdio")
+        return CodexJsonlConfig(runner=runner)
     if intent.provider == "opencode-go":
         if intent.opencode is None:  # pragma: no cover - guarded by parse
             raise CompositionError("invalid")
