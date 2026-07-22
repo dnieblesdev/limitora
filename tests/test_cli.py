@@ -600,7 +600,8 @@ class RendererRegressionTests(unittest.TestCase):
             "RESULT: snapshot\nPROVIDER: fixture-provider\nSTATE: available\n"
             "STATUS_OBSERVED_AT: 2026-07-15T12:00:00Z\nFRESHNESS: fresh\n"
             "FETCHED_AT: 2026-07-15T12:00:00Z\nDATA_AT: 2026-07-15T11:00:00Z\n"
-            "SOURCE: offline-fixture\nQUOTA_WINDOWS: unavailable\nUSAGE: unavailable\n", output)
+            "SOURCE: offline-fixture\nQUOTA_WINDOWS: unavailable\n"
+            "RATE_LIMIT_RESET_CREDITS: unavailable\nUSAGE: unavailable\n", output)
 
     def test_stale_undetected_unconfigured_and_provider_error_routing(self):
         cases = [

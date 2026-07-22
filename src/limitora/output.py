@@ -18,7 +18,7 @@ import json
 from typing import Any
 
 from limitora.api import StatusSnapshotResult, StatusUndetectedResult
-from limitora.models import Quantity, QuotaWindow, UsageSnapshot
+from limitora.models import Quantity, QuotaWindow, RateLimitResetCreditsSummary, UsageSnapshot
 from limitora.providers import ProviderError
 
 
@@ -72,6 +72,23 @@ def usage_to_dict(usage: UsageSnapshot | None) -> dict[str, Any] | None:
     }
 
 
+def reset_credits_to_dict(summary: RateLimitResetCreditsSummary | None) -> dict[str, Any] | None:
+    if summary is None:
+        return None
+    credits = None if summary.credits is None else [
+        {
+            "reset_type": credit.reset_type.value,
+            "status": credit.status.value,
+            "granted_at": isoformat_utc(credit.granted_at),
+            "expires_at": isoformat_utc(credit.expires_at) if credit.expires_at is not None else None,
+            "title": credit.title,
+            "description": credit.description,
+        }
+        for credit in summary.credits
+    ]
+    return {"available_count": summary.available_count, "credits": credits}
+
+
 def snapshot_to_dict(result: StatusSnapshotResult) -> dict[str, Any]:
     """Project a snapshot result into the snapshot envelope dict."""
     snapshot = result.snapshot
@@ -88,6 +105,7 @@ def snapshot_to_dict(result: StatusSnapshotResult) -> dict[str, Any]:
         "data_at": isoformat_utc(snapshot.data_at),
         "source": {"reference": snapshot.source.reference},
         "quota_windows": [window_to_dict(window) for window in snapshot.quota_windows],
+        "rate_limit_reset_credits": reset_credits_to_dict(snapshot.rate_limit_reset_credits),
         "usage": usage_to_dict(snapshot.usage),
     }
 
@@ -154,6 +172,31 @@ def _human_quantity(value: Quantity | None) -> str:
     return _UNAVAILABLE if value is None else f"{value.value} {value.unit}"
 
 
+def _human_text(value: str | None) -> str:
+    return _UNAVAILABLE if value is None else json.dumps(value, ensure_ascii=True)[1:-1]
+
+
+def _render_human_reset_credits(summary: RateLimitResetCreditsSummary | None) -> list[str]:
+    if summary is None:
+        return ["RATE_LIMIT_RESET_CREDITS: unavailable"]
+    lines = ["RATE_LIMIT_RESET_CREDITS:", f"  AVAILABLE_COUNT: {summary.available_count}"]
+    if summary.credits is None:
+        return lines + ["  CREDITS: unavailable"]
+    if not summary.credits:
+        return lines + ["  CREDITS: none"]
+    lines.append("  CREDITS:")
+    for credit in summary.credits:
+        lines.extend((
+            f"    RESET_TYPE: {credit.reset_type.value}",
+            f"    STATUS: {credit.status.value}",
+            f"    GRANTED_AT: {isoformat_utc(credit.granted_at)}",
+            f"    EXPIRES_AT: {_UNAVAILABLE if credit.expires_at is None else isoformat_utc(credit.expires_at)}",
+            f"    TITLE: {_human_text(credit.title)}",
+            f"    DESCRIPTION: {_human_text(credit.description)}",
+        ))
+    return lines
+
+
 def _render_human_usage(usage: UsageSnapshot | None) -> list[str]:
     if usage is None:
         return ["USAGE: unavailable"]
@@ -201,6 +244,7 @@ def _render_human_snapshot(result: StatusSnapshotResult) -> str:
                 f"  REMAINING: {_human_quantity(window.remaining)}",
                 f"  RESET_AT: {_UNAVAILABLE if window.reset_at is None else isoformat_utc(window.reset_at)}",
             ))
+    lines.extend(_render_human_reset_credits(snapshot.rate_limit_reset_credits))
     lines.extend(_render_human_usage(snapshot.usage))
     return "\n".join(lines) + "\n"
 
