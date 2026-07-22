@@ -57,9 +57,10 @@ class _StubTransport:
 def codex_payload():
     return {
         "rateLimits": {
+            "limitId": "codex",
             "planType": "pro",
-            "primary": {"limitId": "codex", "windowDurationMins": 300, "usedPercent": 25},
-            "secondary": {"limitId": "codex", "windowDurationMins": 10080, "usedPercent": 50},
+            "primary": {"windowDurationMins": 300, "usedPercent": 25},
+            "secondary": {"windowDurationMins": 10080, "usedPercent": 50},
         }
     }
 def opencode_response():

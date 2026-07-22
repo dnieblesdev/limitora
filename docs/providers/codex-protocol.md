@@ -85,10 +85,16 @@ Every inbound frame is decoded by
 remains the only "incompatible server" signal.
 
 ```json
-{"id":2,"result":{"rateLimits":{"planType":"pro","primary":{...},"secondary":{...}}}}
+{"id":2,"result":{"rateLimits":{"limitId":"codex","planType":"pro","primary":{...},"secondary":null}}}
 ```
 → correlated response to ``account/rateLimits/read``. The mapping
 layer parses the result into a ``ProviderSnapshot``.
+
+``limitId`` belongs to the ``rateLimits`` snapshot and must equal
+``"codex"``. It is not a field of ``primary`` or ``secondary``.
+Each non-null window contains only the mapped fields
+``usedPercent``, ``resetsAt``, and ``windowDurationMins``; either
+window may be null.
 
 ```json
 {"method":"serverNotification","params":{}}
