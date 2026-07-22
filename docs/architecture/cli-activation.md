@@ -35,9 +35,10 @@ The CLI imports `render_human` and `render_json` from `limitora.output`.
 
 ## Flag grammar
 
-Only space-separated `--key value` is supported. `--key=value` is
-rejected as a usage error (exit 2 stderr). All flags live under the
-single `status` subcommand.
+Only space-separated `--key value` is supported for Limitora flags.
+`--key=value` is rejected as a usage error (exit 2 stderr). Opaque
+runner arguments consumed by `--runner` may contain `=`. All flags live
+under the single `status` subcommand.
 
 ```
 limitora status [--help] [--json] [--provider {codex,opencode-go}] [flags]
@@ -51,7 +52,7 @@ limitora status [--help] [--json] [--provider {codex,opencode-go}] [flags]
 
 | Codex flags | Description |
 |-------------|-------------|
-| `--runner PATH` | Repeatable. Each part is a non-empty stripped token. First part must be an absolute path. |
+| `--runner PATH` | Repeatable. A single absolute path is shorthand for `PATH app-server --stdio`. Two or more values are preserved exactly. Each part is a non-empty stripped token and the first part must be an absolute path. |
 | `--codex-allow-authorized-source` | Opt in to `ALLOW_AUTHORIZED_SOURCE`. Default is `DENY_AUTHORIZED_SOURCE`. |
 
 | OpenCode Go flags | Description |
@@ -65,6 +66,31 @@ limitora status [--help] [--json] [--provider {codex,opencode-go}] [flags]
 Unknown flags, missing values, duplicate single-cardinality flags,
 unexpected positionals, and cross-provider flags all return exit 2 with a
 usage message on stderr.
+
+### Codex runner shorthand
+
+The CLI expands exactly one absolute runner value:
+
+```text
+--runner /usr/bin/codex
+```
+
+into `("/usr/bin/codex", "app-server", "--stdio")`. A relative
+single value is not expanded or resolved; composition validation still
+requires the first runner token to be absolute.
+
+Repeat `--runner` to provide explicit argv. Every value is preserved:
+
+```text
+--runner /usr/bin/codex --runner app-server --runner --stdio
+```
+
+Opaque values beginning with `--`, such as `--stdio`, are accepted only
+as runner arguments when they are not known Limitora flags. For example,
+`--runner --json` and `--runner --provider` are missing-value collisions,
+not runner arguments. The `CodexJsonlConfig` library contract does not
+apply this shorthand: a directly constructed one-token runner remains a
+one-token runner through composition and transport.
 
 ## Stream and exit-code policy
 
@@ -116,8 +142,8 @@ def activate_provider(
 
 The CLI calls `activate_provider` exclusively. The CLI never imports
 `_codex_jsonl` or `_opencode_go_httpx` directly, never instantiates
-`CodexProvider` or `OpenCodeGoProvider`, and never inspects credentials
-or runners. This boundary is enforced by a contract test in
+`CodexProvider` or `OpenCodeGoProvider`, never inspects credentials, and
+never executes runners. This boundary is enforced by a contract test in
 `tests/test_provider_composition.py::ActivateProviderTests`.
 
 ## Privacy guarantees

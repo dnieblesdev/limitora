@@ -247,6 +247,7 @@ class ActivateProviderTests(unittest.TestCase):
         self.assertIsInstance(client, StatusClient)
         provider = client._service._provider
         self.assertIsInstance(provider._session, _CodexJsonlSession)
+        self.assertEqual(("/declared/codex",), provider._runner)
 
     def test_codex_constructs_with_injected_clock(self):
         clock = FixedClock()
