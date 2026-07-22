@@ -3,7 +3,12 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import unittest
 
-from limitora.models import MetricKind, ProviderState
+from limitora.models import (
+    MetricKind,
+    ProviderState,
+    RateLimitResetCreditStatus,
+    RateLimitResetType,
+)
 from limitora.providers._codex_jsonl import _CodexJsonlFailure, _CodexJsonlFailureKind
 from limitora.providers.contract import AuthorizationPolicy, ProviderError, ProviderErrorKind, ProviderRequest
 from limitora.providers.codex import CodexProvider
@@ -37,10 +42,105 @@ def window(duration, used, reset=1_800_000_000):
     return value
 
 
+def reset_credit(**changes):
+    value = {
+        "id": "discarded-placeholder",
+        "resetType": "codexRateLimits",
+        "status": "available",
+        "grantedAt": 1_700_000_000,
+        "expiresAt": None,
+        "title": "Synthetic credit",
+        "description": None,
+    }
+    value.update(changes)
+    return value
+
+
 class CodexProviderTests(unittest.TestCase):
     def provider(self, result=None, failure=None, runner=("/declared/codex",)):
         session = Session(result, failure)
         return CodexProvider(runner, Clock(), session), session
+
+    def test_maps_reset_credit_summary_without_retaining_id_or_assuming_completeness(self):
+        data = payload(window(300, 5))
+        data["rateLimitResetCredits"] = {"availableCount": 3, "credits": [reset_credit()]}
+
+        summary = self.provider(data)[0].fetch(request()).rate_limit_reset_credits
+
+        self.assertIsNotNone(summary)
+        self.assertEqual(3, summary.available_count)
+        self.assertEqual(1, len(summary.credits))
+        credit = summary.credits[0]
+        self.assertEqual(RateLimitResetType.CODEX_RATE_LIMITS, credit.reset_type)
+        self.assertEqual(RateLimitResetCreditStatus.AVAILABLE, credit.status)
+        self.assertEqual(timezone.utc, credit.granted_at.tzinfo)
+        self.assertIsNone(credit.expires_at)
+        self.assertFalse(hasattr(credit, "id"))
+
+    def test_reset_credit_summary_preserves_absent_null_and_empty_details(self):
+        absent = payload(window(300, 5))
+        explicit_null = payload(window(300, 5))
+        explicit_null["rateLimitResetCredits"] = None
+        for data in (absent, explicit_null):
+            with self.subTest(data=data):
+                self.assertIsNone(self.provider(data)[0].fetch(request()).rate_limit_reset_credits)
+
+        unavailable = payload(window(300, 5))
+        unavailable["rateLimitResetCredits"] = {"availableCount": 2, "credits": None}
+        missing = payload(window(300, 5))
+        missing["rateLimitResetCredits"] = {"availableCount": 2}
+        empty = payload(window(300, 5))
+        empty["rateLimitResetCredits"] = {"availableCount": 2, "credits": []}
+        for data in (unavailable, missing):
+            self.assertIsNone(self.provider(data)[0].fetch(request()).rate_limit_reset_credits.credits)
+        self.assertEqual((), self.provider(empty)[0].fetch(request()).rate_limit_reset_credits.credits)
+
+    def test_reset_credit_accepts_missing_or_null_optional_fields(self):
+        public_fields = {
+            "expiresAt": "expires_at",
+            "title": "title",
+            "description": "description",
+        }
+        for upstream, public in public_fields.items():
+            for mode in ("missing", "null"):
+                with self.subTest(field=upstream, mode=mode):
+                    raw = reset_credit()
+                    if mode == "missing":
+                        del raw[upstream]
+                    else:
+                        raw[upstream] = None
+                    data = payload(window(300, 5))
+                    data["rateLimitResetCredits"] = {"availableCount": 1, "credits": [raw]}
+
+                    credit = self.provider(data)[0].fetch(request()).rate_limit_reset_credits.credits[0]
+                    self.assertIsNone(getattr(credit, public))
+
+    def test_malformed_reset_credit_data_fails_closed_and_redacted(self):
+        valid = reset_credit()
+        cases = (
+            [],
+            {"availableCount": True, "credits": None},
+            {"availableCount": -1, "credits": None},
+            {"availableCount": 2**63, "credits": None},
+            {"availableCount": 1, "credits": {}},
+            {"availableCount": 1, "credits": [[]]},
+            {"availableCount": 1, "credits": [{key: value for key, value in valid.items() if key != "id"}]},
+            {"availableCount": 1, "credits": [reset_credit(resetType="other")]},
+            {"availableCount": 1, "credits": [reset_credit(status="other")]},
+            {"availableCount": 1, "credits": [reset_credit(grantedAt=True)]},
+            {"availableCount": 1, "credits": [reset_credit(expiresAt=True)]},
+            {"availableCount": 1, "credits": [reset_credit(title=1)]},
+            {"availableCount": 1, "credits": [reset_credit(description=[])]},
+        )
+        for summary in cases:
+            with self.subTest(summary=summary):
+                data = payload(window(300, 5))
+                data["rateLimitResetCredits"] = summary
+                with self.assertRaises(ProviderError) as raised:
+                    self.provider(data)[0].fetch(request())
+                self.assertEqual(ProviderErrorKind.PARSE_FAILED, raised.exception.kind)
+                for private in ("discarded-placeholder", "Synthetic credit", "other"):
+                    self.assertNotIn(private, raised.exception.safe_message)
 
     def test_detection_and_unconfigured_fetch_never_exchange(self):
         for runner in ((), ("codex",)):

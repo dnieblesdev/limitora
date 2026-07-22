@@ -96,6 +96,8 @@ Each non-null window contains only the mapped fields
 ``usedPercent``, ``resetsAt``, and ``windowDurationMins``; either
 window may be null.
 
+The optional top-level ``rateLimitResetCredits`` is separate account inventory. A present summary maps a non-negative ``availableCount`` and optional-nullable ordered ``credits`` details; missing or null details are unavailable, while an empty list is known empty. List length is not assumed to equal the count. Details retain typed reset kind/status, aware grant/expiration times, title, and description. The required opaque upstream credit ``id`` is validated and immediately discarded, never retained or projected.
+
 ```json
 {"method":"serverNotification","params":{}}
 ```

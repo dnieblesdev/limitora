@@ -20,6 +20,10 @@ from .models import (
     ProviderSnapshot,
     ProviderState,
     ProviderStatus,
+    RateLimitResetCredit,
+    RateLimitResetCreditsSummary,
+    RateLimitResetCreditStatus,
+    RateLimitResetType,
     SourceMetadata,
 )
 from .providers import AuthorizationPolicy, ProviderError, ProviderErrorKind
@@ -39,6 +43,10 @@ __all__ = [
     "ProviderSnapshot",
     "ProviderState",
     "ProviderStatus",
+    "RateLimitResetCredit",
+    "RateLimitResetCreditsSummary",
+    "RateLimitResetCreditStatus",
+    "RateLimitResetType",
     "SourceMetadata",
     "StatusClient",
     "StatusProvider",

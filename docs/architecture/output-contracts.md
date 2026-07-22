@@ -56,12 +56,13 @@ enforced by `tests/test_output.py`:
 - **Snapshot** — `{"version", "result": "snapshot", "provider_id":
   {"value":..}, "freshness", "status": {"state", "observed_at"},
   "fetched_at", "data_at", "source": {"reference":..},
-  "quota_windows": [..], "usage": ..|null}`.
+  "quota_windows": [..], "rate_limit_reset_credits": ..|null, "usage": ..|null}`.
 - **Window** — `kind`, `scope`, `period`, `plan_id` (nullable),
   `availability`, `source.reference`, `limit`/`used`/`remaining` (each
   `{"value", "metric", "unit"}` or `null`), `reset_at` (or `null`).
 - **Usage** — `observed_at`, `availability`, `source.reference`,
   `token_limit`/`token_used`/`balance` (each quantity or `null`).
+- **Reset credits** — `available_count` and nullable ordered `credits`; each detail contains `reset_type`, `status`, `granted_at`, nullable `expires_at`, `title`, and `description`. No provider credit identifier is emitted.
 - **Undetected** — `{"version": 1, "result": "undetected"}`.
 - **Error** — `{"version": 1, "error": {"kind", "provider_id":
   {"value":..}, "safe_message", "retryable"}}`.
@@ -87,6 +88,7 @@ and is locked by per-fixture contract tests.
 |-----------|---------------|
 | Nullable scalar (`plan_id`, `limit`, `used`, `remaining`, `reset_at`, `token_limit`, `token_used`, `balance`, `usage`) | `null` (the field is **present**, not omitted) |
 | Empty collection (`quota_windows` when there are no windows) | `[]` |
+| Reset-credit details unavailable / fetched empty | `credits: null` / `credits: []` |
 | Undetected result | `{"version": 1, "result": "undetected"}` (typed envelope, never `null`, never the snapshot schema) |
 | Error result | `{"version": 1, "error": {...}}` (typed envelope, never the snapshot schema) |
 
@@ -94,6 +96,7 @@ The rule applies uniformly to JSON and human projections. The human
 projection emits the literal `unavailable` for absent scalars and
 `QUOTA_WINDOWS: unavailable` / `USAGE: unavailable` for absent
 collections.
+Reset-credit human output distinguishes unavailable details from a known empty list and escapes display text so control characters cannot inject fields or lines.
 
 ## Sanitization rules
 

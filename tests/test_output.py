@@ -20,6 +20,10 @@ from limitora import (
     ProviderSnapshot,
     ProviderState,
     ProviderStatus,
+    RateLimitResetCredit,
+    RateLimitResetCreditsSummary,
+    RateLimitResetCreditStatus,
+    RateLimitResetType,
     SourceMetadata,
     StatusSnapshotResult,
     StatusUndetectedResult,
@@ -34,7 +38,7 @@ TIME = datetime(2026, 7, 15, 12, tzinfo=UTC)
 ONE_HOUR_EARLIER = TIME - timedelta(hours=1)
 
 
-def snapshot(*, freshness=Freshness.FRESH, windows=(), usage=None):
+def snapshot(*, freshness=Freshness.FRESH, windows=(), usage=None, reset_credits=None):
     return StatusSnapshotResult(ProviderSnapshot(
         provider_id=PROVIDER,
         status=ProviderStatus(PROVIDER, ProviderState.AVAILABLE, TIME),
@@ -43,6 +47,7 @@ def snapshot(*, freshness=Freshness.FRESH, windows=(), usage=None):
         source=SourceMetadata("offline-fixture"),
         quota_windows=windows,
         usage=usage,
+        rate_limit_reset_credits=reset_credits,
     ), freshness)
 
 
@@ -138,6 +143,61 @@ class StaleSnapshotAbsenceTests(unittest.TestCase):
         self.assertEqual("stale", parsed["freshness"])
         self.assertEqual([], parsed["quota_windows"])
         self.assertIsNone(parsed["usage"])
+        self.assertIsNone(parsed["rate_limit_reset_credits"])
+
+
+class ResetCreditProjectionTests(unittest.TestCase):
+    def test_json_projects_typed_reset_credits_without_an_identifier(self) -> None:
+        credit = RateLimitResetCredit(
+            RateLimitResetType.CODEX_RATE_LIMITS,
+            RateLimitResetCreditStatus.REDEEMING,
+            TIME,
+            None,
+            "Synthetic title",
+            None,
+        )
+
+        parsed = json.loads(render_json(snapshot(
+            reset_credits=RateLimitResetCreditsSummary(4, (credit,)),
+        )))
+
+        self.assertEqual({
+            "available_count": 4,
+            "credits": [{
+                "description": None,
+                "expires_at": None,
+                "granted_at": "2026-07-15T12:00:00Z",
+                "reset_type": "codex_rate_limits",
+                "status": "redeeming",
+                "title": "Synthetic title",
+            }],
+        }, parsed["rate_limit_reset_credits"])
+        self.assertNotIn("id", parsed["rate_limit_reset_credits"]["credits"][0])
+
+    def test_human_projection_distinguishes_absent_null_empty_and_escapes_controls(self) -> None:
+        credit = RateLimitResetCredit(
+            RateLimitResetType.UNKNOWN,
+            RateLimitResetCreditStatus.UNKNOWN,
+            TIME,
+            None,
+            "Synthetic\nTITLE: injected",
+            "Synthetic\rDESCRIPTION: injected",
+        )
+
+        self.assertIn("RATE_LIMIT_RESET_CREDITS: unavailable\n", render_human(snapshot()))
+        self.assertIn(
+            "RATE_LIMIT_RESET_CREDITS:\n  AVAILABLE_COUNT: 2\n  CREDITS: unavailable\n",
+            render_human(snapshot(reset_credits=RateLimitResetCreditsSummary(2, None))),
+        )
+        self.assertIn(
+            "RATE_LIMIT_RESET_CREDITS:\n  AVAILABLE_COUNT: 2\n  CREDITS: none\n",
+            render_human(snapshot(reset_credits=RateLimitResetCreditsSummary(2, ()))),
+        )
+        rendered = render_human(snapshot(reset_credits=RateLimitResetCreditsSummary(2, (credit,))))
+        self.assertIn("    TITLE: Synthetic\\nTITLE: injected\n", rendered)
+        self.assertIn("    DESCRIPTION: Synthetic\\rDESCRIPTION: injected\n", rendered)
+        self.assertNotIn("\nTITLE: injected", rendered)
+        self.assertNotIn("\nDESCRIPTION: injected", rendered)
 
 
 class WindowNullableScalarTests(unittest.TestCase):
@@ -241,7 +301,8 @@ class RenderHumanByteIdentityTests(unittest.TestCase):
             "RESULT: snapshot\nPROVIDER: fixture-provider\nSTATE: available\n"
             "STATUS_OBSERVED_AT: 2026-07-15T12:00:00Z\nFRESHNESS: fresh\n"
             "FETCHED_AT: 2026-07-15T12:00:00Z\nDATA_AT: 2026-07-15T11:00:00Z\n"
-            "SOURCE: offline-fixture\nQUOTA_WINDOWS: unavailable\nUSAGE: unavailable\n",
+            "SOURCE: offline-fixture\nQUOTA_WINDOWS: unavailable\n"
+            "RATE_LIMIT_RESET_CREDITS: unavailable\nUSAGE: unavailable\n",
             rendered,
         )
 

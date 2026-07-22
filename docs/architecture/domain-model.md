@@ -10,8 +10,11 @@
 | `QuotaWindow` | One named allowance or technical-limit window. | kind; scope; period; limit value; used value; remaining value; reset time; value availability; source reference |
 | `ProviderSnapshot` | A provider-scoped set of observations captured at one point in time. | provider identifier; observed-at time; status; quota windows; optional usage snapshot; source metadata |
 | `UsageSnapshot` | A provider-scoped account or product usage observation that is not implicitly a quota window. | observed-at time; token-use values when evidenced; balance when evidenced; used/remaining percentage only when derivable; availability and source metadata |
+| `RateLimitResetCreditsSummary` | Optional account inventory for resetting eligible rate limits. | non-negative available count; nullable immutable credit details |
+| `RateLimitResetCredit` | One privacy-safe reset-credit detail. | typed reset kind and status; aware grant/optional expiration times; optional title and description |
 
 `QuotaWindow.kind` distinguishes `commercial_quota` from `technical_rate_limit`. They may coexist for one provider and must never overwrite each other.
+Reset-credit inventory is snapshot metadata, not a quota window or usage value. Opaque provider credit identifiers are never modeled.
 
 ## State semantics
 

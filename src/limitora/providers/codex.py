@@ -7,7 +7,9 @@ from importlib import metadata
 from os.path import isabs
 
 from limitora.models import (MetricKind, ProviderId, ProviderSnapshot, ProviderState, ProviderStatus,
-                             Quantity, QuotaWindow, SourceMetadata, ValueAvailability, WindowKind)
+                             Quantity, QuotaWindow, RateLimitResetCredit, RateLimitResetCreditsSummary,
+                             RateLimitResetCreditStatus, RateLimitResetType, SourceMetadata,
+                             ValueAvailability, WindowKind)
 
 from ._codex_jsonl import _CodexJsonlFailure, _CodexJsonlFailureKind, _CodexJsonlSession, _CodexSessionSpec
 from .contract import AuthorizationPolicy, ProviderDetection, ProviderError, ProviderErrorKind, ProviderRequest
@@ -19,6 +21,9 @@ _SOURCE = SourceMetadata("codex-app-server-v2")
 _SUPPORTED_PLANS = frozenset({"free", "plus", "pro", "team", "business", "enterprise", "edu"})
 _PERIODS = {300: "five_hour", 10080: "weekly"}
 _FALLBACK_CLIENT_VERSION = "0.0.0+unknown"
+_RESET_TYPES = {"codexRateLimits": RateLimitResetType.CODEX_RATE_LIMITS,
+                "unknown": RateLimitResetType.UNKNOWN}
+_RESET_STATUSES = {status.value: status for status in RateLimitResetCreditStatus}
 
 
 def _client_version() -> str:
@@ -83,11 +88,59 @@ class CodexProvider:
                 try: windows.append(self._window(raw, plan))
                 except _MappingError as error: errors.append(error)
             if not windows: raise _MappingError(errors[0].kind if errors else ProviderErrorKind.UNSUPPORTED)
+            reset_credits = self._reset_credits(payload.get("rateLimitResetCredits"))
         except _MappingError as error:
             raise self._failure(error.kind, False) from None
         now = self._clock.now()
         state = ProviderState.AVAILABLE if len(windows) == 2 else ProviderState.PARTIAL
-        return ProviderSnapshot(_PROVIDER_ID, ProviderStatus(_PROVIDER_ID, state, now), now, now, _SOURCE, tuple(windows))
+        return ProviderSnapshot(_PROVIDER_ID, ProviderStatus(_PROVIDER_ID, state, now), now, now, _SOURCE,
+                                tuple(windows), rate_limit_reset_credits=reset_credits)
+
+    @classmethod
+    def _reset_credits(cls, raw: object) -> RateLimitResetCreditsSummary | None:
+        if raw is None:
+            return None
+        if not isinstance(raw, dict):
+            raise _MappingError(ProviderErrorKind.PARSE_FAILED)
+        count = raw.get("availableCount")
+        if type(count) is not int or not 0 <= count <= 2**63 - 1:
+            raise _MappingError(ProviderErrorKind.PARSE_FAILED)
+        raw_credits = raw.get("credits")
+        if raw_credits is None:
+            return RateLimitResetCreditsSummary(count, None)
+        if not isinstance(raw_credits, list):
+            raise _MappingError(ProviderErrorKind.PARSE_FAILED)
+        return RateLimitResetCreditsSummary(count, tuple(cls._reset_credit(item) for item in raw_credits))
+
+    @classmethod
+    def _reset_credit(cls, raw: object) -> RateLimitResetCredit:
+        if not isinstance(raw, dict):
+            raise _MappingError(ProviderErrorKind.PARSE_FAILED)
+        required = ("id", "resetType", "status", "grantedAt")
+        if any(key not in raw for key in required) or not isinstance(raw["id"], str):
+            raise _MappingError(ProviderErrorKind.PARSE_FAILED)
+        reset_type = _RESET_TYPES.get(raw["resetType"]) if isinstance(raw["resetType"], str) else None
+        status = _RESET_STATUSES.get(raw["status"]) if isinstance(raw["status"], str) else None
+        if reset_type is None or status is None:
+            raise _MappingError(ProviderErrorKind.PARSE_FAILED)
+        title, description = raw.get("title"), raw.get("description")
+        if ((title is not None and not isinstance(title, str))
+                or (description is not None and not isinstance(description, str))):
+            raise _MappingError(ProviderErrorKind.PARSE_FAILED)
+        granted_at = cls._timestamp(raw["grantedAt"], nullable=False)
+        expires_at = cls._timestamp(raw.get("expiresAt"), nullable=True)
+        return RateLimitResetCredit(reset_type, status, granted_at, expires_at, title, description)
+
+    @staticmethod
+    def _timestamp(raw: object, *, nullable: bool) -> datetime | None:
+        if raw is None and nullable:
+            return None
+        if type(raw) is not int:
+            raise _MappingError(ProviderErrorKind.PARSE_FAILED)
+        try:
+            return datetime.fromtimestamp(raw, timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            raise _MappingError(ProviderErrorKind.PARSE_FAILED) from None
 
     @staticmethod
     def _window(raw: object, plan: str) -> QuotaWindow:

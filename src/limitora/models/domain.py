@@ -43,6 +43,18 @@ class MetricKind(str, Enum):
     BALANCE = "balance"
 
 
+class RateLimitResetType(str, Enum):
+    CODEX_RATE_LIMITS = "codex_rate_limits"
+    UNKNOWN = "unknown"
+
+
+class RateLimitResetCreditStatus(str, Enum):
+    AVAILABLE = "available"
+    REDEEMING = "redeeming"
+    REDEEMED = "redeemed"
+    UNKNOWN = "unknown"
+
+
 @dataclass(frozen=True)
 class ProviderId:
     value: str
@@ -230,6 +242,49 @@ class UsageSnapshot:
 
 
 @dataclass(frozen=True)
+class RateLimitResetCredit:
+    reset_type: RateLimitResetType
+    status: RateLimitResetCreditStatus
+    granted_at: datetime
+    expires_at: datetime | None
+    title: str | None
+    description: str | None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.reset_type, RateLimitResetType):
+            raise TypeError("reset_type must be a RateLimitResetType")
+        if not isinstance(self.status, RateLimitResetCreditStatus):
+            raise TypeError("status must be a RateLimitResetCreditStatus")
+        if not isinstance(self.granted_at, datetime):
+            raise TypeError("granted_at must be a datetime")
+        _require_aware(self.granted_at, "granted_at")
+        if self.expires_at is not None:
+            if not isinstance(self.expires_at, datetime):
+                raise TypeError("expires_at must be a datetime or None")
+            _require_aware(self.expires_at, "expires_at")
+        for value, name in ((self.title, "title"), (self.description, "description")):
+            if value is not None and not isinstance(value, str):
+                raise TypeError(f"{name} must be a string or None")
+
+
+@dataclass(frozen=True)
+class RateLimitResetCreditsSummary:
+    available_count: int
+    credits: tuple[RateLimitResetCredit, ...] | None
+
+    def __post_init__(self) -> None:
+        if type(self.available_count) is not int:
+            raise TypeError("available_count must be an integer")
+        if self.available_count < 0:
+            raise ValueError("available_count cannot be negative")
+        if self.credits is not None:
+            if not isinstance(self.credits, tuple):
+                raise TypeError("credits must be a tuple or None")
+            if any(not isinstance(credit, RateLimitResetCredit) for credit in self.credits):
+                raise TypeError("credits must contain RateLimitResetCredit values")
+
+
+@dataclass(frozen=True)
 class ProviderSnapshot:
     provider_id: ProviderId
     status: ProviderStatus
@@ -238,6 +293,7 @@ class ProviderSnapshot:
     source: SourceMetadata
     quota_windows: tuple[QuotaWindow, ...] = ()
     usage: UsageSnapshot | None = None
+    rate_limit_reset_credits: RateLimitResetCreditsSummary | None = None
 
     def __post_init__(self) -> None:
         _require_aware(self.fetched_at, "fetched_at")
@@ -248,6 +304,10 @@ class ProviderSnapshot:
             raise ValueError("status provider must match snapshot provider")
         if self.usage is not None and self.usage.provider_id != self.provider_id:
             raise ValueError("usage provider must match snapshot provider")
+        if self.rate_limit_reset_credits is not None and not isinstance(
+            self.rate_limit_reset_credits, RateLimitResetCreditsSummary
+        ):
+            raise TypeError("rate_limit_reset_credits must be a RateLimitResetCreditsSummary or None")
         if len({(window.kind, window.scope, window.period) for window in self.quota_windows}) != len(self.quota_windows):
             raise ValueError("snapshot cannot contain ambiguous quota windows")
         if self.status.state is ProviderState.RATE_LIMITED:

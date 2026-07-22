@@ -1,5 +1,6 @@
 """Deterministic tests for the pure provider-status domain."""
 
+from dataclasses import FrozenInstanceError
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import unittest
@@ -14,6 +15,10 @@ from limitora.models import (
     ProviderStatus,
     Quantity,
     QuotaWindow,
+    RateLimitResetCredit,
+    RateLimitResetCreditsSummary,
+    RateLimitResetCreditStatus,
+    RateLimitResetType,
     SourceMetadata,
     UsageSnapshot,
     ValueAvailability,
@@ -69,6 +74,33 @@ def snapshot(
 
 
 class DomainModelTests(unittest.TestCase):
+    def test_reset_credit_models_are_immutable_and_validate_typed_values(self) -> None:
+        credit = RateLimitResetCredit(
+            RateLimitResetType.CODEX_RATE_LIMITS,
+            RateLimitResetCreditStatus.AVAILABLE,
+            NOW,
+            None,
+            None,
+            None,
+        )
+        summary = RateLimitResetCreditsSummary(3, (credit,))
+
+        self.assertEqual(3, summary.available_count)
+        with self.assertRaises(FrozenInstanceError):
+            credit.title = "changed"  # type: ignore[misc]
+        for invalid in (True, -1):
+            with self.subTest(invalid=invalid), self.assertRaises((TypeError, ValueError)):
+                RateLimitResetCreditsSummary(invalid, None)  # type: ignore[arg-type]
+        with self.assertRaises(ValueError):
+            RateLimitResetCredit(
+                RateLimitResetType.UNKNOWN,
+                RateLimitResetCreditStatus.UNKNOWN,
+                datetime(2026, 1, 1),
+                None,
+                None,
+                None,
+            )
+
     def test_known_planless_opencode_go_commercial_window_is_allowed(self) -> None:
         window = QuotaWindow(
             kind=WindowKind.COMMERCIAL_QUOTA,
