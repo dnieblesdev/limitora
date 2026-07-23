@@ -20,19 +20,25 @@ class FakeHTTPX:
     HTTPError = FakeHTTPError
     Timeout = FakeTimeoutConfig
 class FakeResponse:
-    def __init__(self, clock, status_code=200, chunks=(), headers=None, complete_at=None):
+    def __init__(self, clock, status_code=200, chunks=(), headers=None, complete_at=None, chunk_times=()):
         self.status_code = status_code
         self.headers = headers or {}
         self._clock = clock
         self._chunks = chunks
         self._complete_at = complete_at
+        self._chunk_times = chunk_times
+        self.yielded = []
     def __enter__(self):
         return self
 
     def __exit__(self, *args):
         return False
     def iter_bytes(self):
-        yield from self._chunks
+        for index, chunk in enumerate(self._chunks):
+            if index < len(self._chunk_times):
+                self._clock.value = self._chunk_times[index]
+            self.yielded.append(chunk)
+            yield chunk
         if self._complete_at is not None:
             self._clock.value = self._complete_at
 class FakeStreamClient:
@@ -56,6 +62,27 @@ class MutableClock:
 
     def __call__(self):
         return self.value
+
+
+class ScriptedClock:
+    def __init__(self, *values):
+        self._values = iter(values)
+        self._last = values[-1]
+
+    def __call__(self):
+        self._last = next(self._values, self._last)
+        return self._last
+
+
+class WorkTrackingChunk(bytes):
+    def __new__(cls, value):
+        instance = super().__new__(cls, value)
+        instance.len_calls = 0
+        return instance
+
+    def __len__(self):
+        self.len_calls += 1
+        return super().__len__()
 
 
 class OpenCodeGoHttpxTests(unittest.TestCase):
@@ -93,13 +120,77 @@ class OpenCodeGoHttpxTests(unittest.TestCase):
         self.assertNotIn("unique-cookie-sentinel", represented)
         self.assertNotIn("unique-request-body-sentinel", represented)
 
-    def test_invalid_config_and_expired_budget_short_circuit(self):
+    def test_invalid_config_short_circuits(self):
         invalid = _HttpxOpenCodeGoTransport(self.config(endpoint="https://evil.example"))
         self.assertEqual(PortFailureKind.INVALID, invalid.fetch().kind)
 
-        clock = iter((10.0, 20.0))
-        expired = _HttpxOpenCodeGoTransport(self.config(), monotonic=lambda: next(clock), httpx_module=FakeHTTPX)
-        self.assertEqual(PortFailureKind.TIMEOUT, expired.fetch().kind)
+    def test_configured_timeout_sets_all_httpx_operation_timeouts(self):
+        clock = MutableClock(3.0)
+        factory_options = []
+
+        def factory(**kwargs):
+            factory_options.append(kwargs)
+            return FakeStreamClient(FakeResponse(clock))
+
+        transport = _HttpxOpenCodeGoTransport(
+            self.config(timeout=timedelta(seconds=2)), monotonic=clock,
+            client_factory=factory, httpx_module=FakeHTTPX,
+        )
+
+        result = transport.fetch()
+
+        self.assertEqual((200, b""), (result.status_code, result.body))
+        timeout = factory_options[0]["timeout"]
+        self.assertEqual(
+            (2.0, 2.0, 2.0, 2.0),
+            (timeout.kwargs["connect"], timeout.kwargs["read"],
+             timeout.kwargs["write"], timeout.kwargs["pool"]),
+        )
+
+    def test_expired_configured_budget_prevents_request_execution(self):
+        factory_calls = []
+
+        def factory(**kwargs):
+            factory_calls.append(kwargs)
+            return FakeStreamClient(FakeResponse(MutableClock()))
+
+        transport = _HttpxOpenCodeGoTransport(
+            self.config(timeout=timedelta(seconds=1)),
+            monotonic=ScriptedClock(10.0, 11.0),
+            client_factory=factory,
+            httpx_module=FakeHTTPX,
+        )
+
+        result = transport.fetch()
+
+        self.assertEqual(
+            PortFailure(PortFailureKind.TIMEOUT, "OpenCode Go request budget expired"),
+            result,
+        )
+        self.assertEqual([], factory_calls)
+
+    def test_expired_budget_does_not_process_late_or_following_chunks(self):
+        clock = MutableClock()
+        late = WorkTrackingChunk(b"x" * (512 * 1024))
+        following = WorkTrackingChunk(b"following")
+        response = FakeResponse(
+            clock, chunks=(late, following), chunk_times=(2.0, 2.0)
+        )
+        transport = _HttpxOpenCodeGoTransport(
+            self.config(timeout=timedelta(seconds=2)), monotonic=clock,
+            client_factory=lambda **_: FakeStreamClient(response),
+            httpx_module=FakeHTTPX,
+        )
+
+        result = transport.fetch()
+
+        self.assertEqual(
+            PortFailure(PortFailureKind.TIMEOUT, "OpenCode Go request budget expired"),
+            result,
+        )
+        self.assertEqual([late], response.yielded)
+        self.assertEqual(0, late.len_calls)
+        self.assertEqual(0, following.len_calls)
 
     def test_declared_and_streamed_body_caps_are_exclusive(self):
         self.assertEqual(512 * 1024, _HttpxOpenCodeGoTransport.BODY_LIMIT)
