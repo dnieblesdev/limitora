@@ -31,6 +31,7 @@ class FakeProcess:
         if self.cleanup_waits.pop(0): raise TimeoutError
     def kill(self): self.events.append("kill")
     def close(self): self.events.append("streams")
+    def join_reader(self, timeout): self.events.append("join"); return True
 
 
 class Factory:
@@ -72,7 +73,7 @@ class CodexJsonlTests(unittest.TestCase):
         # ``initialize`` carries ``clientInfo`` (name+version), no ``protocolVersion``.
         self.assertNotIn("protocolVersion", sent[0]["params"])
         self.assertEqual({"name": "limitora", "version": "1.2.3"}, sent[0]["params"]["clientInfo"])
-        self.assertEqual(["close", "terminate", "wait", "streams"], process.events)
+        self.assertEqual(["close", "terminate", "wait", "streams", "join"], process.events)
 
     def test_bad_initialization_stops_before_notification_and_rate_limit_request(self):
         process = FakeProcess((err(1, 500),)); session, spec = self.session(process)
@@ -104,7 +105,7 @@ class CodexJsonlTests(unittest.TestCase):
         process = FakeProcess((b"",), cleanup_waits=(True, True)); session, spec = self.session(process)
         with self.assertRaises(_CodexJsonlFailure) as raised: session.exchange(spec)
         self.assertEqual(_CodexJsonlFailureKind.PROCESS, raised.exception.kind)
-        self.assertEqual(["close", "terminate", "wait", "kill", "wait", "streams"], process.events)
+        self.assertEqual(["close", "terminate", "wait", "kill", "wait", "streams", "join"], process.events)
 
     def test_safe_rpc_categories_bounds_and_cleanup_escalation(self):
         cases = (((err(1, 401),), _CodexJsonlFailureKind.UNAUTHORIZED), ((err(1, 429),), _CodexJsonlFailureKind.RATE_LIMITED), ((err(1, 503),), _CodexJsonlFailureKind.UNAVAILABLE), ((b"x" * 1025,), _CodexJsonlFailureKind.OUTPUT_LIMIT))
@@ -121,7 +122,7 @@ class CodexJsonlTests(unittest.TestCase):
         self.assertEqual(_CodexJsonlFailureKind.PROCESS, raised.exception.kind)
         process = FakeProcess((b"",), cleanup_waits=(True, False)); session, spec = self.session(process)
         with self.assertRaises(_CodexJsonlFailure): session.exchange(spec)
-        self.assertEqual(["close", "terminate", "wait", "kill", "wait", "streams"], process.events)
+        self.assertEqual(["close", "terminate", "wait", "kill", "wait", "streams", "join"], process.events)
 
 
 if __name__ == "__main__": unittest.main()

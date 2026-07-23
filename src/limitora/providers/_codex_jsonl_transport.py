@@ -6,11 +6,13 @@ byte-cap, and cleanup. No JSON parsing, no session orchestration.
 from __future__ import annotations
 
 from datetime import timedelta
+from enum import Enum
 import os
-import select
+import queue
 import subprocess
+import threading
 import time
-from typing import Callable, Optional, Protocol
+from typing import Callable, NamedTuple, Optional, Protocol
 
 from limitora._runner_path import _is_native_absolute_runner_path
 
@@ -38,12 +40,69 @@ class _Process(Protocol):
     def wait(self, timeout: float) -> None: ...
     def kill(self) -> None: ...
     def close(self) -> None: ...
+    def join_reader(self, timeout: float) -> bool: ...
 
 
 class _ProcessFactory(Protocol):
     """A factory that returns a ``_Process`` for a given session spec."""
 
     def start(self, spec: "_CodexSessionSpec") -> _Process: ...
+
+
+class _ReadKind(Enum):
+    DATA = 1
+    EOF = 2
+    ERROR = 3
+
+
+class _ReadSignal(NamedTuple):
+    kind: _ReadKind
+    data: bytes = b""
+
+
+class _PipeReader:
+    """One bounded, blocking pipe reader for a subprocess stdout handle."""
+
+    def __init__(self, descriptor: int, read_chunk: int = 4096) -> None:
+        self._descriptor = descriptor
+        self._read_chunk = read_chunk
+        self._signals: queue.Queue[_ReadSignal] = queue.Queue(maxsize=1)
+        self._stop = threading.Event()
+        self._thread = threading.Thread(
+            target=self._run, name="limitora-codex-stdout", daemon=True
+        )
+    def start(self) -> None:
+        self._thread.start()
+
+    def _run(self) -> None:
+        try:
+            chunk = os.read(self._descriptor, self._read_chunk)
+            signal = _ReadSignal(_ReadKind.DATA, chunk) if chunk else _ReadSignal(_ReadKind.EOF)
+        except Exception:
+            signal = _ReadSignal(_ReadKind.ERROR)
+        self._signals.put(signal)
+        while signal.kind is _ReadKind.DATA and not self._stop.is_set():
+            try:
+                chunk = os.read(self._descriptor, self._read_chunk)
+                signal = _ReadSignal(_ReadKind.DATA, chunk) if chunk else _ReadSignal(_ReadKind.EOF)
+            except Exception:
+                signal = _ReadSignal(_ReadKind.ERROR)
+            self._signals.put(signal)
+
+    def read(self, timeout: float) -> Optional[_ReadSignal]:
+        try:
+            return self._signals.get(timeout=max(timeout, 0))
+        except queue.Empty:
+            return None
+
+    def stop_and_join(self, timeout: float) -> bool:
+        self._stop.set()
+        try:
+            self._signals.get_nowait()
+        except queue.Empty:
+            pass
+        self._thread.join(max(timeout, 0))
+        return not self._thread.is_alive()
 
 
 class _PopenProcess:
@@ -54,7 +113,7 @@ class _PopenProcess:
     process diagnostics.
     """
 
-    def __init__(self, command: tuple[str, ...]) -> None:
+    def __init__(self, command: tuple[str, ...], cleanup_allowance: timedelta = timedelta(seconds=1)) -> None:
         if not command or not _is_native_absolute_runner_path(command[0]):
             raise OSError("runner must be an explicit path")
         self._child = subprocess.Popen(
@@ -64,6 +123,21 @@ class _PopenProcess:
             stderr=subprocess.DEVNULL,
             shell=False,
         )
+        self._reader: Optional[_PipeReader] = None
+        self._remainder = bytearray()
+        if not self._start_reader():
+            _cleanup(self, cleanup_allowance)
+            raise OSError("pipe reader startup failed")
+
+    def _start_reader(self) -> bool:
+        try:
+            if self._child.stdout is None:
+                return False
+            self._reader = _PipeReader(self._child.stdout.fileno())
+            self._reader.start()
+            return True
+        except Exception:
+            return False
 
     def write(self, data: bytes) -> None:
         assert self._child.stdin is not None
@@ -71,9 +145,21 @@ class _PopenProcess:
         self._child.stdin.flush()
 
     def read(self, maximum: int, timeout: float) -> Optional[bytes]:
-        assert self._child.stdout is not None
-        ready, _, _ = select.select([self._child.stdout], [], [], max(timeout, 0))
-        return os.read(self._child.stdout.fileno(), maximum) if ready else None
+        if self._remainder:
+            chunk = bytes(self._remainder[:maximum])
+            del self._remainder[:maximum]
+            return chunk
+        assert self._reader is not None
+        signal = self._reader.read(timeout)
+        if signal is None:
+            return None
+        if signal.kind is _ReadKind.ERROR:
+            raise OSError("pipe read failed")
+        if signal.kind is _ReadKind.EOF:
+            return b""
+        chunk = signal.data[:maximum]
+        self._remainder.extend(signal.data[maximum:])
+        return chunk
 
     def poll(self) -> Optional[int]:
         return self._child.poll()
@@ -96,12 +182,15 @@ class _PopenProcess:
         if self._child.stdout is not None:
             self._child.stdout.close()
 
+    def join_reader(self, timeout: float) -> bool:
+        return self._reader is None or self._reader.stop_and_join(timeout)
+
 
 class _PopenFactory:
     """The default :class:`_ProcessFactory`; uses :class:`_PopenProcess`."""
 
     def start(self, spec: "_CodexSessionSpec") -> _Process:
-        return _PopenProcess(spec.runner)
+        return _PopenProcess(spec.runner, spec.cleanup_allowance)
 
 
 class _BoundedLineReader:
@@ -154,6 +243,9 @@ class _BoundedLineReader:
     def has_pending(self) -> bool:
         return bool(self._buffer)
 
+    def pending(self) -> bytes:
+        return bytes(self._buffer)
+
     def read_one(self, timeout: float) -> Optional[bytes]:
         """Read up to 1 byte and append to the pending buffer. ``None`` on timeout/EOF."""
         chunk = self._process.read(1, timeout)
@@ -166,25 +258,30 @@ class _BoundedLineReader:
         return chunk
 
 
-def _cleanup(process: _Process, allowance: timedelta) -> Optional[_CodexJsonlFailure]:
+def _attempt(action: Callable[[], object]) -> bool:
+    try:
+        return action() is not False
+    except Exception:
+        return False
+
+
+def _cleanup(process: _Process, allowance: timedelta, monotonic: Callable[[], float] = time.monotonic) -> Optional[_CodexJsonlFailure]:
     """Tear down ``process``: terminate -> wait -> kill -> wait -> close.
 
     Returns ``PROCESS`` failure on teardown exception, else ``None``.
     """
-    failure: Optional[_CodexJsonlFailure] = None
+    deadline = monotonic() + allowance.total_seconds()
+    remaining = lambda: max(0.0, deadline - monotonic())
+    failed = not _attempt(process.close_stdin)
+    failed = not _attempt(process.terminate) or failed
     try:
-        process.close_stdin()
-        process.terminate()
-        try:
-            process.wait(allowance.total_seconds())
-        except TimeoutError:
-            process.kill()
-            process.wait(allowance.total_seconds())
-    except Exception:
-        failure = _CodexJsonlFailure(_CodexJsonlFailureKind.PROCESS)
-    finally:
-        try:
-            process.close()
-        except Exception:
-            failure = _CodexJsonlFailure(_CodexJsonlFailureKind.PROCESS)
-    return failure
+        process.wait(remaining())
+        must_kill = False
+    except Exception as error:
+        must_kill = True; failed = not isinstance(error, (TimeoutError, subprocess.TimeoutExpired)) or failed
+    if must_kill:
+        failed = not _attempt(process.kill) or failed
+        failed = not _attempt(lambda: process.wait(remaining())) or failed
+    failed = not _attempt(process.close) or failed
+    failed = not _attempt(lambda: process.join_reader(remaining())) or failed
+    return _CodexJsonlFailure(_CodexJsonlFailureKind.PROCESS) if failed else None
