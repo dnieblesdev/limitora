@@ -13,6 +13,7 @@ from limitora.models import (
 from limitora.providers._codex_jsonl import _CodexJsonlFailure, _CodexJsonlFailureKind
 from limitora.providers.contract import AuthorizationPolicy, ProviderError, ProviderErrorKind, ProviderRequest
 from limitora.providers.codex import CodexProvider
+from tests._native_runner import NATIVE_RUNNER
 
 
 class Clock:
@@ -58,7 +59,7 @@ def reset_credit(**changes):
 
 
 class CodexProviderTests(unittest.TestCase):
-    def provider(self, result=None, failure=None, runner=("/declared/codex",)):
+    def provider(self, result=None, failure=None, runner=NATIVE_RUNNER):
         session = Session(result, failure)
         return CodexProvider(runner, Clock(), session), session
 
