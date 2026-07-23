@@ -1,6 +1,8 @@
-# Provider-status design roadmap
+# Provider-status implementation history and roadmap
 
-**Decision:** This is a design roadmap, not current implementation authorization. It sequences independently reviewable work and does not authorize provider access, authentication, networking, local-file reads, subprocesses, cache implementation, CLI implementation, configuration changes, or publishing.
+> **Status: concluded/historical baseline.** The slices below record the design sequence and its constraints. The typed domain, provider contract, orchestration, public API, Codex/OpenCode Go adapters, composition, cache, output, and CLI slices are implemented and test-backed in the current repository. This page does not authorize new provider access or credential discovery.
+
+**Decision:** Preserve this roadmap as historical design rationale. Current behavior is defined by source, tests, and the linked architecture contracts.
 
 **No-conflation rule:** Commercial quota, technical rate limits, token usage, balances, and percentage derivation are distinct concepts. No slice may map one to another, infer one from another, or present them as interchangeable.
 
@@ -115,4 +117,4 @@ Codex and OpenCode Go remain separate because they have different products, evid
 
 ## Non-goals
 
-This roadmap authorizes no implementation. In particular, it does not authorize providers, authentication, networking, subprocesses, local-file reads, caches, CLI, UI, configuration changes, tests, CI, or publishing during the current documentation-only phase.
+The roadmap itself authorizes no new implementation. Any future work must update the relevant contract and evidence first; it must not infer support for providers, credentials, live values, or stability from this historical sequence.

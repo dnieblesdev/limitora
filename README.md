@@ -1,69 +1,90 @@
 # Limitora
 
-Limitora is a Python library for provider-agnostic LLM interaction with rate limiting and safe local integration. It is being built so scripts and small tools can talk to code-generation providers without embedding UI-specific logic or leaking secrets.
+Limitora is a typed Python library for provider-agnostic quota and status observations. It keeps provider adapters, composition, caching, output projection, and the CLI behind explicit boundaries so scripts and small tools can inspect status without embedding UI logic or leaking secrets.
 
-> **Current status**: scaffolding and research. No public API is defined yet.
+> **Current status**: version `0.1.0` ships the typed public API, deterministic output projections, a provider-aware `limitora status` CLI, Codex JSONL support, and opt-in OpenCode Go support.
+
+## Install and typed quick path
+
+```bash
+python -m pip install -e .
+```
+
+The public API can be used without invoking a provider:
+
+```python
+from datetime import timedelta
+from limitora import AuthorizationPolicy, FreshnessPolicy, MetricKind, StatusRequest
+
+request = StatusRequest(
+    frozenset({MetricKind.COMMERCIAL_QUOTA}),
+    AuthorizationPolicy.DENY_AUTHORIZED_SOURCE,
+    FreshnessPolicy(timedelta(minutes=5)),
+)
+print(request.requested_metrics)
+```
+
+Provider reads require an explicit `StatusClient` or composition boundary; provider calls are never implicit.
 
 ## Problem
 
 Local scripting tools that call LLM providers often end up tied to a specific editor, desktop widget, or GUI framework. That coupling makes them hard to test, hard to reuse, and risky to extend. Limitora keeps the provider conversation in a plain Python library so integrations can be thin and optional.
 
-## Planned architecture
+## Architecture at a glance
 
 ```text
 ┌─────────────────────────────────────┐
 │           consumers / CLI           │
 ├─────────────────────────────────────┤
-│  limitora.cli                       │
-│  limitora.core                      │
-│  limitora.models                    │
+│  limitora.cli / limitora.output     │
+│  limitora.composition / limitora.api│
+│  limitora.core / limitora.models    │
 ├─────────────────────────────────────┤
 │  limitora.providers                 │
 │    ├── codex                        │
 │    ├── opencode-go                  │
-│    ├── claude (future)              │
-│    └── gemini (future)              │
+│    └── explicit provider adapters   │
 ├─────────────────────────────────────┤
-│  limitora.cache (future)            │
+│  limitora.providers.cache           │
 └─────────────────────────────────────┘
 ```
 
-- `core` will hold the coordinator, rate-limit logic, and request lifecycle.
-- `models` will define stable data contracts.
-- `providers` will contain one adapter per LLM service.
-- `cache` will hold optional, local, redact-first persistence helpers.
-- `cli` provides the fixed human-readable `limitora status` presentation boundary.
+- `api` and `models` define the stable typed consumer boundary.
+- `core` coordinates detection and snapshot reads; `composition` selects one explicit provider.
+- `providers` owns contracts and private adapters; `cache` is opt-in, in-memory reuse.
+- `output` projects typed results to JSON v1 or human text; `cli` owns parsing, streams, and exits.
 
 Limitora never imports YASB, PyQt, Waybar, or any UI integration.
 
 ## Provider support
 
-| Phase | Provider | Status |
-|-------|----------|--------|
-| 1 | Codex | planned |
-| 1 | OpenCode Go | planned |
-| 2 | Claude | future |
-| 2 | Gemini | future |
+| Provider | Status | Boundary |
+|----------|--------|----------|
+| Codex | shipped | Explicit Codex JSONL adapter; authorized source is opt-in. |
+| OpenCode Go | shipped, opt-in | Explicit dashboard adapter; authorization and endpoint behavior are qualified. |
+| Claude / Gemini | not shipped | No adapter or support promise. |
 
 ## Public API
 
-The public API is not defined yet. The first stable surface will live in `limitora.core` and `limitora.models`; provider modules will be imported directly only when a consumer explicitly chooses a backend.
+The stable root surface includes `StatusClient`, `StatusRequest`, freshness types, provider-neutral models, and safe provider errors. Provider transport, parser, session, and credential details are not public API.
 
 ## CLI status
 
-`limitora status` renders human-readable typed status evidence only. It has no JSON mode or provider/configuration options; until an application injects a composed client, the installed command deterministically reports that no provider is configured (exit code 4). Live provider composition and JSON are deferred.
+`limitora status` supports `--json`, `--help`, and explicit `--provider codex|opencode-go` activation. Without a provider it performs no provider I/O and reports `ERROR: no provider configured` on stderr with exit code 4. Routing is documented in [`cli-activation.md`](docs/architecture/cli-activation.md).
 
 ## Security and privacy
 
 Never store tokens, cookies, sessions, credentials, or provider cache data unredacted in this repository. Diagnostic dumps must be redacted before sharing. Redacted artifacts may use the names `*.redacted.json` or `*.redacted.txt`.
 
-## Roadmap
+## Roadmap status
 
-1. Finalize core models and provider contract.
-2. Implement Codex and OpenCode Go providers.
-3. Add rate-limiting helpers.
-4. Add live provider composition or a separate machine-readable contract.
-5. Evaluate Claude and Gemini providers.
+The original provider-status roadmap is **concluded/historical** for the shipped baseline. Current implementation evidence is in the source and tests; future provider work is not promised.
+
+1. ✅ Typed domain, provider contract, orchestration, and public API.
+2. ✅ Codex and OpenCode Go adapters with explicit composition.
+3. ✅ In-memory cache and deterministic JSON v1/human projections.
+4. ✅ Explicit CLI activation with safe, documented failure boundaries.
+5. ⏸ Claude and Gemini remain unimplemented evaluation items.
 
 ## Future relation to yasb-limitora
 
