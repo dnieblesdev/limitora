@@ -52,7 +52,7 @@ limitora status [--help] [--json] [--provider {codex,opencode-go}] [flags]
 
 | Codex flags | Description |
 |-------------|-------------|
-| `--runner PATH` | Repeatable. A single absolute path is shorthand for `PATH app-server --stdio`. Two or more values are preserved exactly. Each part is a non-empty stripped token and the first part must be an absolute path. |
+| `--runner PATH` | Repeatable. A single native absolute path is shorthand for `PATH app-server --stdio`. Two or more values are preserved exactly. Each part is a non-empty stripped token and the first part must be absolute for the host platform. |
 | `--codex-allow-authorized-source` | Opt in to `ALLOW_AUTHORIZED_SOURCE`. Default is `DENY_AUTHORIZED_SOURCE`. |
 
 | OpenCode Go flags | Description |
@@ -69,15 +69,18 @@ usage message on stderr.
 
 ### Codex runner shorthand
 
-The CLI expands exactly one absolute runner value:
+The CLI expands exactly one native absolute runner value. POSIX hosts accept
+POSIX absolute paths; Windows hosts accept drive-qualified and complete UNC
+paths while rejecting POSIX, drive-relative, rooted-without-drive, incomplete
+UNC, and device-namespace paths:
 
 ```text
 --runner /usr/bin/codex
 ```
 
-into `("/usr/bin/codex", "app-server", "--stdio")`. A relative
-single value is not expanded or resolved; composition validation still
-requires the first runner token to be absolute.
+into `("/usr/bin/codex", "app-server", "--stdio")` on POSIX. A relative or
+non-native single value is not expanded or resolved; composition validation
+still requires the first runner token to be native-absolute.
 
 Repeat `--runner` to provide explicit argv. Every value is preserved:
 

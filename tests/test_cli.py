@@ -353,6 +353,18 @@ class IntentToConfigUnitTests(unittest.TestCase):
 
         self.assertEqual(CodexJsonlConfig(runner=("codex",)), config)
 
+    def test_single_runner_shorthand_uses_native_path_contract(self):
+        intent = CliIntent(provider="codex", codex=CodexIntent(runner=("native-runner",)))
+        with patch(
+            "limitora.cli._is_native_absolute_runner_path", return_value=True
+        ) as validator:
+            config = intent_to_config(intent)
+
+        validator.assert_called_once_with("native-runner")
+        self.assertEqual(
+            ("native-runner", "app-server", "--stdio"), config.runner
+        )
+
     def test_opencode_intent_maps_to_opencode_config(self):
         intent = CliIntent(
             provider="opencode-go",

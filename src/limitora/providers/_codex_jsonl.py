@@ -81,17 +81,23 @@ class _CodexJsonlSession:
         payload: Optional[dict] = None
         try:
             process = self._factory.start(spec)
+            reader = _BoundedLineReader(
+                process,
+                deadline=deadline,
+                max_output_bytes=spec.max_output_bytes,
+                monotonic=self._monotonic,
+            )
             self._check_deadline(deadline)
             process.write(build_request("initialize", 1, {
                 "clientInfo": {"name": "limitora", "version": spec.client_version},
             }))
-            self._read_correlated(process, deadline, spec.max_output_bytes, 1)
+            self._read_correlated(reader, 1)
             self._check_deadline(deadline)
             process.write(build_notification("initialized", {}))
             self._check_deadline(deadline)
             process.write(build_request("account/rateLimits/read", 2, {}))
-            payload = self._read_correlated(process, deadline, spec.max_output_bytes, 2).result
-            extra = self._probe_trailing(process, spec.max_output_bytes)
+            payload = self._read_correlated(reader, 2).result
+            extra = self._probe_trailing(reader, deadline)
             if extra is not None:
                 raise _CodexJsonlFailure(_CodexJsonlFailureKind.PROTOCOL)
             if process.poll() not in (None, 0):
@@ -117,18 +123,10 @@ class _CodexJsonlSession:
 
     def _read_correlated(
         self,
-        process: _Process,
-        deadline: float,
-        cap: int,
+        reader: _BoundedLineReader,
         ident: int,
     ) -> _ParsedFrame:
         """Read frames until the correlated ``ident`` arrives. Skips notifications; maps error codes via ``_ERROR_CODE_KIND``."""
-        reader = _BoundedLineReader(
-            process,
-            deadline=deadline,
-            max_output_bytes=cap,
-            monotonic=self._monotonic,
-        )
         while True:
             line = reader.read_line()
             frame = parse_frame(line)
@@ -143,12 +141,8 @@ class _CodexJsonlSession:
             assert frame.result is not None
             return frame
 
-    def _probe_trailing(self, process: _Process, cap: int) -> Optional[bytes]:
+    def _probe_trailing(self, reader: _BoundedLineReader, deadline: float) -> Optional[bytes]:
         """Probe for trailing output after the last newline. ``None`` on EOF/timeout, bytes on extra data."""
-        reader = _BoundedLineReader(
-            process,
-            deadline=self._monotonic() + 0.001,
-            max_output_bytes=cap,
-            monotonic=self._monotonic,
-        )
-        return reader.read_one(timeout=0.0)
+        if reader.has_pending():
+            return reader.pending()
+        return reader.read_one(timeout=min(0.001, max(0.0, deadline - self._monotonic())))

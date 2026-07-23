@@ -39,11 +39,13 @@ class ScriptedProcess:
         self.cleanup_waits = list(cleanup_waits)
         self.writes: list[bytes] = []
         self.events: list[str] = []
+        self.timeouts: list[float] = []
 
     def write(self, data: bytes) -> None:
         self.writes.append(data)
 
     def read(self, maximum: int, timeout: float):
+        self.timeouts.append(timeout)
         if not self.reads:
             return b""
         chunk = self.reads.pop(0)
@@ -65,6 +67,7 @@ class ScriptedProcess:
             raise TimeoutError
     def kill(self): self.events.append("kill")
     def close(self): self.events.append("streams")
+    def join_reader(self, timeout): self.events.append("join"); return True
 
 
 class MappingFactory:
@@ -149,6 +152,22 @@ class MappingSessionContractTests(unittest.TestCase):
         with self.assertRaises(_CodexJsonlFailure) as raised:
             session.exchange(spec)
         self.assertEqual(_CodexJsonlFailureKind.PROTOCOL, raised.exception.kind)
+
+    def test_same_chunk_trailing_data_is_rejected(self):
+        process = ScriptedProcess(reads=[ok(1, {}), ok(2, {}) + b"trailing"]); session, spec = self.session(process)
+        with self.assertRaises(_CodexJsonlFailure) as raised: session.exchange(spec)
+        self.assertEqual(_CodexJsonlFailureKind.PROTOCOL, raised.exception.kind)
+    def test_cap_is_cumulative_across_notifications_and_both_responses(self):
+        transcript = notification("n") + ok(1, {}) + ok(2, {})
+        process = ScriptedProcess(reads=[transcript]); session, spec = self.session(process)
+        spec = _CodexSessionSpec(spec.runner, spec.timeout, len(transcript) - 1, spec.cleanup_allowance)
+        with self.assertRaises(_CodexJsonlFailure) as raised: session.exchange(spec)
+        self.assertEqual(_CodexJsonlFailureKind.OUTPUT_LIMIT, raised.exception.kind)
+    def test_trailing_probe_uses_remaining_original_deadline(self):
+        for now, expected in ((10.25, 0.001), (10.9995, 0.0005)):
+            process = ScriptedProcess(reads=[ok(1, {}), ok(2, {}), None]); times = iter((10.0,) * 6 + (now,))
+            spec = _CodexSessionSpec(("/declared/codex",), timedelta(seconds=1), 4096, timedelta(milliseconds=10)); _CodexJsonlSession(MappingFactory(process), lambda: next(times)).exchange(spec)
+            self.assertAlmostEqual(expected, process.timeouts[-1])
 
     def test_outbound_frames_omit_jsonrpc_envelope_key(self):
         process = ScriptedProcess(reads=[ok(1, {}), ok(2, {"rateLimits": {}})])
