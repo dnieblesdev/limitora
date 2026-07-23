@@ -30,7 +30,7 @@ public surface (``_CodexJsonlSession``, ``_CodexSessionSpec``,
 
 | Layer | Owns | Module |
 |---|---|---|
-| Transport | ``subprocess.Popen`` start, read/write I/O, deadline enforcement, byte-cap, terminate/kill/close cleanup | ``_codex_jsonl_transport.py`` |
+| Transport | ``subprocess.Popen`` start, bounded worker/queue read I/O, deadline enforcement, byte-cap, terminate/kill/close/join cleanup | ``_codex_jsonl_transport.py`` |
 | Protocol | JSON-RPC envelope build and parse. **No I/O.** | ``_codex_jsonl_protocol.py`` |
 | Mapping | Request ``id`` correlation, notification skipping, error-code → failure-kind lookup, session orchestration | ``_codex_jsonl.py`` |
 
@@ -155,17 +155,18 @@ error message or any token.
 ## Cleanup sequence
 
 Each ``_CodexJsonlSession.exchange`` call runs the bounded
-cleanup regardless of outcome:
+cleanup regardless of outcome, sharing one cumulative monotonic allowance:
 
 1. ``process.close_stdin()`` — close the child's stdin so it sees
    EOF.
-2. ``process.terminate()`` — ``SIGTERM``.
+2. ``process.terminate()`` — request native process termination.
 3. ``process.wait(cleanup_allowance)`` — bounded wait.
-4. If the child is still alive: ``process.kill()`` (``SIGKILL``)
+4. On ``TimeoutExpired`` or a compatible timeout: ``process.kill()``
    then ``process.wait(cleanup_allowance)`` again.
 5. ``process.close()`` — close the captured stdout stream.
+6. Signal and join the stdout reader worker within ``cleanup_allowance``.
 
-Any exception during teardown is converted to a redacted
+Every phase runs after failures or budget exhaustion, using zero remaining wait. Any failure becomes a redacted
 ``_CodexJsonlFailure(kind=PROCESS)``; that failure takes precedence
 over a payload-returning outcome, so the session never reports
 success if cleanup failed.
@@ -182,9 +183,15 @@ The session is redaction-strict:
   bytes it failed to parse.
 * ``stderr`` is connected to ``subprocess.DEVNULL``; raw process
   output never lands in diagnostics.
-* ``_PopenProcess`` requires the runner to be an absolute path
-  (``runner[0].startswith("/")``); relative or empty runners are
+* ``_PopenProcess`` requires a native absolute runner path. POSIX accepts
+  POSIX absolute paths; Windows accepts drive-qualified and complete UNC
+  paths, but rejects POSIX paths, drive-relative or rooted-without-drive
+  paths, incomplete UNC paths, and device namespaces. Invalid runners are
   rejected with ``OSError`` before ``subprocess.Popen`` runs.
+
+## Portable bounded reads
+Each subprocess has one daemon stdout worker and one-slot queue; fixed reads bound memory.
+A bounded join failure maps to ``PROCESS``; the daemon cannot block interpreter shutdown, and direct-child cleanup does not promise process-tree handle closure.
 
 These rules describe safe failure, not provider stability: unauthorized,
 rate-limited, unavailable, incompatible, malformed, or over-bounded input is
@@ -192,18 +199,20 @@ represented as a typed failure and does not expose the upstream payload.
 
 ## Trailing-data probe
 
-After the final correlated response, the session probes for any
-extra output the server may have written past the closing newline:
+After the final response, the session probes for extra output:
 
-1. ``_BoundedLineReader.read_one(timeout=0.0)`` reads up to 1 byte.
-2. If any bytes arrive, ``PROTOCOL`` is raised.
-3. If ``process.poll()`` returns a non-zero exit code, ``PROCESS``
-   is raised.
+1. Bytes already buffered after the final response immediately raise ``PROTOCOL``.
+2. Otherwise ``_BoundedLineReader.read_one`` probes for at most 1 ms, capped by
+   the time remaining on the original deadline; any byte raises ``PROTOCOL``.
+3. A non-zero process exit raises ``PROCESS``.
 4. Otherwise the session returns the rate-limit payload.
 
-The probe uses a near-immediate deadline (``monotonic() + 0.001``)
-so a stalled server cannot extend the session past the spec
-contract.
+The initialize response, notifications, final response, and trailing check all
+share one functional deadline. Cleanup alone has a separate bounded allowance.
+
+``windows-codex-transport.yml`` verifies native Windows with Python 3.14 using
+hermetic synthetic children and no Codex installation or authentication; it does
+not claim that a particular Codex release has passed.
 
 ## Cross-references
 

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import timedelta
-from os.path import isabs
 from enum import Enum
 from typing import TYPE_CHECKING, Callable, Literal, Protocol, TypeAlias
 
+from ._runner_path import _is_native_absolute_runner_path
 from .api import Clock, CurrentClock, StatusClient
 
 if TYPE_CHECKING:
@@ -72,7 +72,7 @@ def _valid_codex(config: CodexJsonlConfig) -> bool:
         and isinstance(config.runner, tuple)
         and bool(config.runner)
         and all(isinstance(part, str) and part and part.strip() == part for part in config.runner)
-        and isabs(config.runner[0])
+        and _is_native_absolute_runner_path(config.runner[0])
     )
 def _valid_opencode(config: OpenCodeGoConfig) -> bool:
     return (

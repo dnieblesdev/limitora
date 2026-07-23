@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import unittest
+from unittest.mock import patch
 
 from limitora.models import (
     MetricKind,
@@ -12,6 +13,7 @@ from limitora.models import (
 from limitora.providers._codex_jsonl import _CodexJsonlFailure, _CodexJsonlFailureKind
 from limitora.providers.contract import AuthorizationPolicy, ProviderError, ProviderErrorKind, ProviderRequest
 from limitora.providers.codex import CodexProvider
+from tests._native_runner import NATIVE_RUNNER
 
 
 class Clock:
@@ -57,7 +59,7 @@ def reset_credit(**changes):
 
 
 class CodexProviderTests(unittest.TestCase):
-    def provider(self, result=None, failure=None, runner=("/declared/codex",)):
+    def provider(self, result=None, failure=None, runner=NATIVE_RUNNER):
         session = Session(result, failure)
         return CodexProvider(runner, Clock(), session), session
 
@@ -151,6 +153,17 @@ class CodexProviderTests(unittest.TestCase):
                 self.assertEqual(ProviderErrorKind.NOT_CONFIGURED, raised.exception.kind)
                 self.assertFalse(raised.exception.retryable)
                 self.assertEqual([], session.calls)
+
+    def test_detection_uses_native_path_contract(self):
+        provider, session = self.provider(runner=("native-runner",))
+        with patch(
+            "limitora.providers.codex._is_native_absolute_runner_path",
+            return_value=True,
+        ) as validator:
+            self.assertTrue(provider.detect().detected)
+
+        validator.assert_called_once_with("native-runner")
+        self.assertEqual([], session.calls)
 
     def test_policy_denial_short_circuits_before_exchange(self):
         provider, session = self.provider(payload(window(300, 5)))

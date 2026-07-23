@@ -2,6 +2,7 @@ import unittest
 from dataclasses import FrozenInstanceError
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from limitora import (
     AuthorizationPolicy,
@@ -24,6 +25,7 @@ from limitora.composition import (
 )
 from limitora.providers.cache import ProviderCachePolicy
 from limitora.providers.ports import HttpResponse
+from tests._native_runner import NATIVE_RUNNER
 NOW = datetime(2026, 7, 18, 12, tzinfo=timezone.utc)
 REQUEST = StatusRequest(
     frozenset({MetricKind.COMMERCIAL_QUOTA}),
@@ -69,14 +71,14 @@ class ProviderCompositionTests(unittest.TestCase):
     def test_cache_option_is_default_off_validated_before_factories_and_wraps_both_providers(self):
         clock, calls = FixedClock(), []
         deps = CodexJsonlDependencies(clock, lambda: calls.append(True) or Session(codex_payload()))
-        with self.assertRaises(CompositionError): build_status_client(CodexJsonlConfig(("/declared/codex",)), deps, cache_policy=object())
+        with self.assertRaises(CompositionError): build_status_client(CodexJsonlConfig(NATIVE_RUNNER), deps, cache_policy=object())
         self.assertEqual([], calls)
         policy = ProviderCachePolicy(timedelta(minutes=1), timedelta(minutes=2))
-        client = build_status_client(CodexJsonlConfig(("/declared/codex",)), deps, cache_policy=policy)
+        client = build_status_client(CodexJsonlConfig(NATIVE_RUNNER), deps, cache_policy=policy)
         client.read_status(REQUEST); client.read_status(REQUEST)
         self.assertEqual(1, len(calls)); self.assertEqual(1, client._service._provider._reader._session.calls)
         uncached_session = Session(codex_payload())
-        uncached = build_status_client(CodexJsonlConfig(("/declared/codex",)), CodexJsonlDependencies(clock, lambda: uncached_session))
+        uncached = build_status_client(CodexJsonlConfig(NATIVE_RUNNER), CodexJsonlDependencies(clock, lambda: uncached_session))
         uncached.read_status(REQUEST); uncached.read_status(REQUEST)
         self.assertEqual(2, uncached_session.calls)
         transport = Transport(opencode_response())
@@ -84,7 +86,7 @@ class ProviderCompositionTests(unittest.TestCase):
         opencode.read_status(REQUEST); opencode.read_status(REQUEST)
         self.assertEqual(1, transport.calls)
     def test_configs_are_frozen_and_discriminator_is_closed(self):
-        codex = CodexJsonlConfig(("/declared/codex",))
+        codex = CodexJsonlConfig(NATIVE_RUNNER)
         opencode = OpenCodeGoConfig("workspace", "opaque-cookie")
 
         self.assertEqual("codex", codex.provider)
@@ -152,8 +154,25 @@ class ProviderCompositionTests(unittest.TestCase):
                 self.assertEqual(CompositionErrorKind.INVALID, raised.exception.kind)
         self.assertEqual([], session_calls)
         self.assertEqual([], transport_calls)
+
+    def test_codex_validation_uses_native_path_contract_before_factory(self):
+        calls = []
+        with patch(
+            "limitora.composition._is_native_absolute_runner_path",
+            return_value=False,
+        ) as validator:
+            with self.assertRaises(CompositionError):
+                build_status_client(
+                    CodexJsonlConfig(("native-runner",)),
+                    CodexJsonlDependencies(
+                        FixedClock(), lambda: calls.append(True) or Session(codex_payload())
+                    ),
+                )
+
+        validator.assert_called_once_with("native-runner")
+        self.assertEqual([], calls)
     def test_rejects_missing_and_mismatched_dependencies_without_factory_calls(self):
-        config = CodexJsonlConfig(("/declared/codex",))
+        config = CodexJsonlConfig(NATIVE_RUNNER)
         with self.assertRaises(CompositionError) as raised:
             build_status_client(config, None)
         self.assertEqual(CompositionErrorKind.MISSING, raised.exception.kind)
@@ -182,7 +201,7 @@ class ProviderCompositionTests(unittest.TestCase):
             return Transport(opencode_response())
 
         client = build_status_client(
-            CodexJsonlConfig(("/declared/codex",)),
+            CodexJsonlConfig(NATIVE_RUNNER),
             CodexJsonlDependencies(clock, session_factory),
         )
         result = client.read_status(REQUEST)
@@ -244,21 +263,21 @@ class ActivateProviderTests(unittest.TestCase):
         from limitora.providers._codex_jsonl import _CodexJsonlSession
         from unittest.mock import patch
 
-        client = activate_provider(CodexJsonlConfig(("/declared/codex",)), clock=FixedClock())
+        client = activate_provider(CodexJsonlConfig(NATIVE_RUNNER), clock=FixedClock())
         self.assertIsInstance(client, StatusClient)
         provider = client._service._provider
         self.assertIsInstance(provider._session, _CodexJsonlSession)
-        self.assertEqual(("/declared/codex",), provider._runner)
+        self.assertEqual(NATIVE_RUNNER, provider._runner)
 
     def test_codex_constructs_with_injected_clock(self):
         clock = FixedClock()
-        client = activate_provider(CodexJsonlConfig(("/declared/codex",)), clock=clock)
+        client = activate_provider(CodexJsonlConfig(NATIVE_RUNNER), clock=clock)
         self.assertIs(client._clock, clock)
 
     def test_codex_uses_current_clock_by_default(self):
         from limitora.api import CurrentClock
 
-        client = activate_provider(CodexJsonlConfig(("/declared/codex",)))
+        client = activate_provider(CodexJsonlConfig(NATIVE_RUNNER))
         self.assertIsInstance(client._clock, CurrentClock)
 
     def test_codex_read_status_invokes_session_factory_exactly_once(self):
@@ -274,7 +293,7 @@ class ActivateProviderTests(unittest.TestCase):
 
         with self.assertRaises(CompositionError):
             build_status_client(
-                CodexJsonlConfig(("/declared/codex",)),
+                CodexJsonlConfig(NATIVE_RUNNER),
                 CodexJsonlDependencies(FixedClock(), session_factory),
                 enabled=False,
             )
