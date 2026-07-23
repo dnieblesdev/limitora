@@ -1,6 +1,6 @@
 # Codex JSON-RPC handshake contract
 
-This document captures the **verified** JSON-RPC handshake contract
+This document captures the **repository-verified** JSON-RPC handshake contract
 between Limitora and the `codex app-server --stdio` provider. It
 mirrors the implementation in
 ``src/limitora/providers/_codex_jsonl_protocol.py``,
@@ -10,6 +10,17 @@ mirrors the implementation in
 For the broader provider contract — typed errors, redaction rules,
 and snapshot semantics — see
 [``docs/architecture/provider-contract.md``](../architecture/provider-contract.md).
+
+## Evidence and uncertainty
+
+The implementation details below are corroborated by repository tests and
+source. They are not a guarantee that an installed Codex release preserves the
+same protocol. The public [Codex documentation](https://developers.openai.com/codex/)
+and [Codex pricing](https://developers.openai.com/codex/pricing) are canonical
+product references, accessed 2026-07-14; neither publishes a complete stable
+JSON-RPC schema for every app-server version. The executable endpoint,
+available methods, and response fields can change, so unsupported or malformed
+provider input fails closed rather than being guessed.
 
 ## Layered split
 
@@ -42,7 +53,8 @@ carry the standard ``"jsonrpc":"2.0"`` discriminator.
   (resolved via ``importlib.metadata.version("limitora")``); when
   metadata is absent (e.g. editable install without ``.dist-info``)
   the adapter falls back to the sentinel ``"0.0.0+unknown"``.
-* ``params.protocolVersion`` is **not** sent.
+* ``params.protocolVersion`` is **not** sent; protocol-version negotiation is
+  intentionally not claimed by this adapter.
 
 ### 2. ``initialized`` notification (no id)
 
@@ -173,6 +185,10 @@ The session is redaction-strict:
 * ``_PopenProcess`` requires the runner to be an absolute path
   (``runner[0].startswith("/")``); relative or empty runners are
   rejected with ``OSError`` before ``subprocess.Popen`` runs.
+
+These rules describe safe failure, not provider stability: unauthorized,
+rate-limited, unavailable, incompatible, malformed, or over-bounded input is
+represented as a typed failure and does not expose the upstream payload.
 
 ## Trailing-data probe
 

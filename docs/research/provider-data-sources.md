@@ -2,7 +2,10 @@
 
 **Decision:** treat Codex and OpenCode Go as separate commercial products, and expose only evidence-backed values. A technical API rate limit must never be presented as a customer subscription quota.
 
-**Research access date:** 2026-07-14. This report used public documentation and public repositories only; no account, local authentication material, or provider request was accessed.
+**Research access date:** 2026-07-22. **Lifecycle:** historical research
+concluded for the current implementation boundary. This report used public
+documentation and public repositories only; no account, local authentication
+material, or provider request was accessed.
 
 ## Vocabulary and classification
 
@@ -19,7 +22,13 @@
 
 ## Provider identity resolution
 
-OpenCode's official provider documentation identifies **OpenCode Go** as a low-cost subscription plan, not the Go programming language or an independently verified API product. It documents sign-in, billing details, and API-key onboarding. The public [OpenCode repository](https://github.com/anomalyco/opencode) identifies OpenCode as an open-source coding agent; it does not establish an OpenCode Go account-usage surface. Upstream-provider data must not be attributed to OpenCode Go.
+OpenCode's official [Go documentation](https://opencode.ai/docs/go/) identifies
+**OpenCode Go** as a low-cost subscription plan, not the Go programming
+language or an independently verified public API product. It documents sign-in,
+billing details, and onboarding. The public [OpenCode repository](https://github.com/anomalyco/opencode)
+identifies OpenCode as an open-source coding agent; it does not establish an
+OpenCode Go account-usage surface. Upstream-provider data must not be
+attributed to OpenCode Go.
 
 ## Viability matrix
 
@@ -33,15 +42,21 @@ OpenCode's official provider documentation identifies **OpenCode Go** as a low-c
 | Codex | Plan | supported | [Codex pricing](https://developers.openai.com/codex/pricing) lists Free, Go, Plus, Pro, Business, Enterprise/Edu, and API-key pricing paths. | First-party OpenAI developer documentation. | Medium: plans and eligibility can change. | Identifying a user's selected plan requires authenticated account context. | Public plan catalog; no individual plan assertion. | Do not infer an account plan from a provider response or rate limit. | viable |
 | Codex | Auth status | unknown | [Using Codex with your ChatGPT plan](https://help.openai.com/en/articles/11369540) documents signing in with a ChatGPT account. | First-party OpenAI Help Center. | Medium: client flows can change. | The observation itself requires an authorized account interaction. | Public docs establish the sign-in requirement, not a safe status-reading surface. | Do not inspect local credentials, cookies, tokens, or sessions. | requires more research |
 | Codex | Availability | supported | [Codex pricing](https://developers.openai.com/codex/pricing) states that Codex is included with listed ChatGPT plans and documents plan/surface availability. | First-party OpenAI developer documentation. | Medium: plan, region, and workspace availability can change. | Account-specific eligibility requires authenticated context. | Product availability only, not a live service-health or account-eligibility result. | Do not confuse product availability with quota availability. | viable |
-| OpenCode Go | Daily quota | unavailable | [OpenCode providers documentation](https://opencode.ai/docs/providers/#opencode-go) describes the plan but publishes no daily quota. | First-party OpenCode documentation. | Unknown. | Onboarding requires sign-in and billing details. | No value or account source documented. | Do not infer a daily quota from upstream providers. | unavailable |
-| OpenCode Go | Weekly quota | unavailable | [OpenCode providers documentation](https://opencode.ai/docs/providers/#opencode-go) publishes no weekly quota. | First-party OpenCode documentation. | Unknown. | Onboarding requires sign-in and billing details. | No value or account source documented. | Do not synthesize a weekly limit from a subscription label. | unavailable |
-| OpenCode Go | Monthly quota | unavailable | [OpenCode providers documentation](https://opencode.ai/docs/providers/#opencode-go) calls it a subscription plan but publishes no monthly allowance. | First-party OpenCode documentation. | Unknown. | Onboarding requires sign-in and billing details. | No value or account source documented. | A subscription price or billing requirement is not a monthly quota. | unavailable |
-| OpenCode Go | Remaining/used percentage | unavailable | [OpenCode providers documentation](https://opencode.ai/docs/providers/#opencode-go) publishes no used and total values. | First-party OpenCode documentation. | Unknown. | No public account-usage source identified. | None. | Never emit `0%` when the source is absent. | unavailable |
-| OpenCode Go | Reset timestamp | unavailable | [OpenCode providers documentation](https://opencode.ai/docs/providers/#opencode-go) identifies no quota or technical-limit window with a reset time. | First-party OpenCode documentation. | Unknown. | No public account-usage source identified. | None. | A reset must retain a provider-confirmed window and must not be guessed. | unavailable |
-| OpenCode Go | Plan | supported | [OpenCode providers documentation](https://opencode.ai/docs/providers/#opencode-go) identifies OpenCode Go as a low-cost subscription plan. | First-party OpenCode documentation. | Medium: subscription terms can change. | Onboarding requires sign-in and billing details. | Product identity only; no account plan or pricing detail asserted. | Do not attribute upstream model-provider plans to OpenCode Go. | viable |
-| OpenCode Go | Auth status | unknown | [OpenCode providers documentation](https://opencode.ai/docs/providers/#opencode-go) documents sign-in, billing details, and an API key for onboarding. | First-party OpenCode documentation. | Medium: onboarding flow can change. | The observation itself requires a user-authorized interaction. | No public status-reading source documented. | Do not inspect OpenCode's local authentication storage. | requires more research |
-| OpenCode Go | Availability | supported | [OpenCode providers documentation](https://opencode.ai/docs/providers/#opencode-go) states that OpenCode Go is optional and works as an OpenCode provider. | First-party OpenCode documentation. | Medium: plan and model availability can change. | Account-specific eligibility requires authenticated context. | Product availability only, not service health or account eligibility. | Do not substitute availability of OpenCode Zen or an upstream provider. | viable |
+| OpenCode Go | Daily quota | unavailable | [OpenCode Go documentation](https://opencode.ai/docs/go/) describes the plan but publishes no daily quota. | First-party OpenCode documentation. | Unknown. | Onboarding requires sign-in and billing details. | No value or account source documented. | Do not infer a daily quota from upstream providers. | unavailable |
+| OpenCode Go | Weekly quota | supported | [OpenCode Go documentation](https://opencode.ai/docs/go/) publishes a `$30` weekly usage limit, accessed 2026-07-22. | First-party OpenCode documentation. | Medium: limits and terms can change. | Exact account usage requires authorized context. | Public plan limit only; no individual remaining value. | Do not convert dollar limits into request counts or technical rate limits. | conditional |
+| OpenCode Go | Monthly quota | supported | [OpenCode Go documentation](https://opencode.ai/docs/go/) publishes a `$60` monthly usage limit, accessed 2026-07-22. | First-party OpenCode documentation. | Medium: limits and terms can change. | Exact account usage requires authorized context. | Public plan limit only; no individual remaining value. | A subscription price is not a monthly allowance; this documented usage limit is still distinct from API throttling. | conditional |
+| OpenCode Go | Remaining/used percentage | unavailable | [OpenCode Go documentation](https://opencode.ai/docs/go/) publishes no used and total values. | First-party OpenCode documentation. | Unknown. | No public account-usage source identified. | None. | Never emit `0%` when the source is absent. | unavailable |
+| OpenCode Go | Reset timestamp | unavailable | [OpenCode Go documentation](https://opencode.ai/docs/go/) identifies no quota or technical-limit window with a reset time. | First-party OpenCode documentation. | Unknown. | No public account-usage source identified. | None. | A reset must retain a provider-confirmed window and must not be guessed. | unavailable |
+| OpenCode Go | Plan | supported | [OpenCode Go documentation](https://opencode.ai/docs/go/) identifies OpenCode Go as a low-cost subscription plan. | First-party OpenCode documentation. | Medium: subscription terms can change. | Onboarding requires sign-in and billing details. | Product identity only; no account plan or pricing detail asserted. | Do not attribute upstream model-provider plans to OpenCode Go. | viable |
+| OpenCode Go | Auth status | unknown | [OpenCode Go documentation](https://opencode.ai/docs/go/) documents sign-in and onboarding. | First-party OpenCode documentation. | Medium: onboarding flow can change. | The observation itself requires a user-authorized interaction. | No public status-reading source documented. | Do not inspect OpenCode's local authentication storage. | requires more research |
+| OpenCode Go | Availability | supported | [OpenCode Go documentation](https://opencode.ai/docs/go/) states that OpenCode Go is optional and works as an OpenCode provider. | First-party OpenCode documentation. | Medium: plan and model availability can change. | Account-specific eligibility requires authenticated context. | Product availability only, not service health or account eligibility. | Do not substitute availability of OpenCode Zen or an upstream provider. | viable |
 
 ## Implementation boundary
 
-This research authorizes no provider implementation. A later, separately approved discovery phase may inspect public product documentation again and design a user-authorized source only for entries classified `conditional` or `requires more research`. Entries classified `unavailable` remain absent rather than synthesized.
+This research authorizes no provider implementation. The current bounded
+implementation is described in [OpenCode Go protocol](../providers/opencode-go-protocol.md)
+and uses a user-authorized, opt-in source; it does not turn this public research
+into account-usage evidence. A later, separately approved discovery phase may
+inspect public product documentation again and design a user-authorized source
+only for entries classified `conditional` or `requires more research`. Entries
+classified `unavailable` remain absent rather than synthesized.
