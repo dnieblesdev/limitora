@@ -590,6 +590,13 @@ class PrivacyContractTests(unittest.TestCase):
         self.assertNotIn("Traceback", output)
         self.assertNotIn("__cause__", output)
 
+    def test_opencode_intent_repr_hides_workspace_and_cookie(self):
+        sentinel = "unique-cli-sensitive-sentinel"
+        intent = OpenCodeGoIntent(workspace_id=sentinel, auth_cookie=sentinel)
+
+        self.assertNotIn(sentinel, repr(intent))
+        self.assertNotIn(sentinel, repr(CliIntent(provider="opencode-go", opencode=intent)))
+
 
 class RendererRegressionTests(unittest.TestCase):
     def test_fixed_request_and_fresh_snapshot_are_rendered(self):

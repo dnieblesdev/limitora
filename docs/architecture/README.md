@@ -14,7 +14,7 @@ Limitora is a plain Python library that reads provider status through explicit c
 | `limitora.core` | Coordinate detection and provider snapshot reads | Import UI frameworks or session managers |
 | `limitora.models` | Define stable typed domain contracts | Depend on provider SDKs |
 | `limitora.providers` | Define contracts, safe errors, cache, and adapters | Leak tokens, cookies, sessions, or credentials |
-| `limitora.composition` | Validate explicit configuration and select one provider | Discover credentials or silently fall back |
+| `limitora.composition` | Implement the root-exported construction types and activate one provider lazily | Discover credentials, expose dependencies/transports, or silently fall back |
 | `limitora.output` / `limitora.cli` | Project results; parse flags, own streams and exits | Calculate state, instantiate adapters, or embed UI logic |
 
 ## Integration rules
@@ -26,7 +26,7 @@ Limitora is a plain Python library that reads provider status through explicit c
 
 ## API stability
 
-The stable public API is rooted in `limitora` and includes `StatusClient`, `StatusRequest`, freshness types, provider-neutral models, and safe provider errors. Provider modules and composition details may change as sources evolve; consumers must not depend on private adapters.
+The stable public API is rooted in `limitora` and includes `StatusClient`, `StatusRequest`, freshness types, provider-neutral models, safe provider errors, and the closed construction contract (`CodexJsonlConfig`, `OpenCodeGoConfig`, `ProviderConfig`, `activate_provider`, `CompositionError`, and `CompositionErrorKind`). Dependency types, provider modules, adapters, and transports remain internal.
 
 Importing `limitora` does not load provider implementations, `subprocess`, or the optional `httpx` dependency. `activate_provider` loads only the selected implementation and returns one reusable client; it does not aggregate providers. OpenCode Go's `workspace_id` and `auth_cookie` are sensitive in-memory inputs and are excluded from Limitora-controlled representations.
 

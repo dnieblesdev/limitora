@@ -1,20 +1,29 @@
 """Consumer-facing contract tests for the public Limitora library API."""
 
 from datetime import datetime, timedelta, timezone
+import json
+import logging
+import subprocess
+import sys
 import unittest
 from unittest.mock import patch
 
 import limitora
 from limitora import (
     AuthorizationPolicy,
+    CodexJsonlConfig,
+    CompositionError,
+    CompositionErrorKind,
     Freshness,
     FreshnessPolicy,
     InvalidProviderSelectionError,
     InvalidStatusRequestError,
     MetricKind,
+    OpenCodeGoConfig,
     ProviderError,
     ProviderErrorKind,
     ProviderId,
+    ProviderConfig,
     ProviderSnapshot,
     ProviderState,
     ProviderStatus,
@@ -28,6 +37,7 @@ from limitora import (
     StatusResult,
     StatusSnapshotResult,
     StatusUndetectedResult,
+    activate_provider,
 )
 from limitora.providers import ProviderDetection, ProviderRequest
 
@@ -94,15 +104,20 @@ class PublicLibraryApiTests(unittest.TestCase):
         expected_exports = {
             "AuthorizationPolicy",
             "Clock",
+            "CodexJsonlConfig",
+            "CompositionError",
+            "CompositionErrorKind",
             "CurrentClock",
             "Freshness",
             "FreshnessPolicy",
             "InvalidProviderSelectionError",
             "InvalidStatusRequestError",
             "MetricKind",
+            "OpenCodeGoConfig",
             "ProviderError",
             "ProviderErrorKind",
             "ProviderId",
+            "ProviderConfig",
             "ProviderSnapshot",
             "ProviderState",
             "ProviderStatus",
@@ -117,6 +132,7 @@ class PublicLibraryApiTests(unittest.TestCase):
             "StatusResult",
             "StatusSnapshotResult",
             "StatusUndetectedResult",
+            "activate_provider",
         }
 
         self.assertEqual(expected_exports, set(limitora.__all__))
@@ -124,6 +140,65 @@ class PublicLibraryApiTests(unittest.TestCase):
             self.assertIsNotNone(getattr(limitora, symbol))
         for unsupported in ("ProviderReader", "StatusService", "cli", "json", "output"):
             self.assertNotIn(unsupported, limitora.__all__)
+
+    def test_root_import_does_not_eagerly_load_provider_implementations(self) -> None:
+        script = """
+import json
+import sys
+import limitora
+names = (
+    "httpx",
+    "subprocess",
+    "limitora.providers.codex",
+    "limitora.providers._codex_jsonl",
+    "limitora.providers._opencode_go",
+    "limitora.providers._opencode_go_httpx",
+)
+print(json.dumps({name: name in sys.modules for name in names}, sort_keys=True))
+"""
+
+        completed = subprocess.run(
+            [sys.executable, "-c", script], check=True, capture_output=True, text=True
+        )
+
+        self.assertEqual({name: False for name in (
+            "httpx",
+            "subprocess",
+            "limitora.providers.codex",
+            "limitora.providers._codex_jsonl",
+            "limitora.providers._opencode_go",
+            "limitora.providers._opencode_go_httpx",
+        )}, json.loads(completed.stdout))
+
+    def test_consumers_construct_and_reuse_one_client_per_provider_from_root(self) -> None:
+        configs: tuple[ProviderConfig, ...] = (
+            CodexJsonlConfig(("/declared/codex",)),
+            OpenCodeGoConfig("workspace", "opaque-cookie"),
+        )
+
+        for config in configs:
+            with self.subTest(provider=config.provider):
+                client = activate_provider(config, clock=FixedClock())
+                self.assertIsInstance(client, StatusClient)
+                with patch.object(client, "read_status", return_value=StatusUndetectedResult()) as read:
+                    self.assertIsInstance(client.read_status(REQUEST), StatusUndetectedResult)
+                    self.assertIsInstance(client.read_status(REQUEST), StatusUndetectedResult)
+                self.assertEqual(2, read.call_count)
+
+    def test_root_construction_preserves_safe_validation_errors(self) -> None:
+        secret = "public-construction-secret"
+        config = OpenCodeGoConfig(secret, secret, endpoint="https://invalid.example")
+
+        with self.assertLogs("limitora.consumer", level="INFO") as captured:
+            logging.getLogger("limitora.consumer").info("config=%r", config)
+
+        with self.assertRaises(CompositionError) as raised:
+            activate_provider(config)
+
+        self.assertEqual(CompositionErrorKind.INVALID, raised.exception.kind)
+        self.assertNotIn(secret, repr(config))
+        self.assertNotIn(secret, "".join(captured.output))
+        self.assertNotIn(secret, repr(raised.exception))
 
     def test_current_clock_is_timezone_aware_and_default_client_is_usable(self) -> None:
         current_time = limitora.CurrentClock().now()

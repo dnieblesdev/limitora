@@ -125,7 +125,7 @@ def activate_provider(
 ) -> StatusClient: ...
 ```
 
-- Lives in `limitora.composition`. Not re-exported from the root.
+- Is implemented in `limitora.composition` and exported from the stable `limitora` root with the closed config and composition error types.
 - The **only** module that imports `_codex_jsonl` and
   `_opencode_go_httpx`.
 - Dispatches on the `ProviderConfig` discriminator and constructs the

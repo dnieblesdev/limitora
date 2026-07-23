@@ -24,7 +24,7 @@ request = StatusRequest(
 print(request.requested_metrics)
 ```
 
-Provider reads require an explicit `StatusClient` or composition boundary; provider calls are never implicit.
+Provider reads require an explicit `StatusClient` or construction boundary; provider calls are never implicit.
 
 ## Problem
 
@@ -66,7 +66,16 @@ Limitora never imports YASB, PyQt, Waybar, or any UI integration.
 
 ## Public API
 
-The stable root surface includes `StatusClient`, `StatusRequest`, freshness types, provider-neutral models, and safe provider errors. Provider transport, parser, session, and credential details are not public API.
+The stable root surface includes `StatusClient`, `StatusRequest`, freshness types, provider-neutral models, safe provider errors, and the closed construction boundary: `CodexJsonlConfig`, `OpenCodeGoConfig`, `ProviderConfig`, `activate_provider`, `CompositionError`, and `CompositionErrorKind`. Provider dependencies, transports, sessions, and adapters remain internal.
+
+Consumers construct and retain one client for the selected provider:
+
+```python
+from limitora import OpenCodeGoConfig, activate_provider
+
+config = OpenCodeGoConfig(workspace_id, auth_cookie)
+client = activate_provider(config)
+```
 
 The consuming application owns environment or configuration access and passes values explicitly; Limitora does not read credentials from the environment. Treat both `workspace_id` and `auth_cookie` as sensitive. Limitora-controlled representations omit them, and request representations omit workspace-bearing URLs, headers, and bodies.
 
