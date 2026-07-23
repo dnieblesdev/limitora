@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from os.path import isabs
 from enum import Enum
@@ -20,8 +20,8 @@ class CodexJsonlConfig:
     provider: Literal["codex"] = "codex"
 @dataclass(frozen=True)
 class OpenCodeGoConfig:
-    workspace_id: str
-    auth_cookie: str
+    workspace_id: str = field(repr=False)
+    auth_cookie: str = field(repr=False)
     provider: Literal["opencode-go"] = "opencode-go"
     endpoint: str = "https://opencode.ai"
     timeout: timedelta = timedelta(seconds=10)

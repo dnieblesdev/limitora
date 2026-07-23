@@ -68,6 +68,8 @@ Limitora never imports YASB, PyQt, Waybar, or any UI integration.
 
 The stable root surface includes `StatusClient`, `StatusRequest`, freshness types, provider-neutral models, and safe provider errors. Provider transport, parser, session, and credential details are not public API.
 
+The consuming application owns environment or configuration access and passes values explicitly; Limitora does not read credentials from the environment. Treat both `workspace_id` and `auth_cookie` as sensitive. Limitora-controlled representations omit them, and request representations omit workspace-bearing URLs, headers, and bodies.
+
 ## CLI status
 
 `limitora status` supports `--json`, `--help`, and explicit `--provider codex|opencode-go` activation. Without a provider it performs no provider I/O and reports `ERROR: no provider configured` on stderr with exit code 4. Routing is documented in [`cli-activation.md`](docs/architecture/cli-activation.md).

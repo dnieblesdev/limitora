@@ -102,8 +102,8 @@ class CodexIntent:
 class OpenCodeGoIntent:
     """Intermediate representation for the ``opencode-go`` provider flags."""
 
-    workspace_id: str = ""
-    auth_cookie: str = ""
+    workspace_id: str = field(default="", repr=False)
+    auth_cookie: str = field(default="", repr=False)
     endpoint: str = _DEFAULT_ENDPOINT
     timeout_seconds: int = _DEFAULT_TIMEOUT_SECONDS
     allow_authorized_source: bool = False

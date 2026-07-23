@@ -20,12 +20,15 @@ Limitora is a plain Python library that reads provider status through explicit c
 ## Integration rules
 
 - Consumers import `limitora` directly.
+- Consumers own environment and configuration access, pass provider values explicitly, and retain the returned `StatusClient` for reuse.
 - UI integrations (for example, a future `yasb-limitora` package) live outside this repository.
 - Limitora never imports YASB, PyQt, Waybar, or any UI integration.
 
 ## API stability
 
 The stable public API is rooted in `limitora` and includes `StatusClient`, `StatusRequest`, freshness types, provider-neutral models, and safe provider errors. Provider modules and composition details may change as sources evolve; consumers must not depend on private adapters.
+
+Importing `limitora` does not load provider implementations, `subprocess`, or the optional `httpx` dependency. `activate_provider` loads only the selected implementation and returns one reusable client; it does not aggregate providers. OpenCode Go's `workspace_id` and `auth_cookie` are sensitive in-memory inputs and are excluded from Limitora-controlled representations.
 
 ## MVP constraints
 
