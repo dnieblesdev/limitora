@@ -2,6 +2,7 @@ import unittest
 from dataclasses import FrozenInstanceError
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from limitora import (
     AuthorizationPolicy,
@@ -152,6 +153,23 @@ class ProviderCompositionTests(unittest.TestCase):
                 self.assertEqual(CompositionErrorKind.INVALID, raised.exception.kind)
         self.assertEqual([], session_calls)
         self.assertEqual([], transport_calls)
+
+    def test_codex_validation_uses_native_path_contract_before_factory(self):
+        calls = []
+        with patch(
+            "limitora.composition._is_native_absolute_runner_path",
+            return_value=False,
+        ) as validator:
+            with self.assertRaises(CompositionError):
+                build_status_client(
+                    CodexJsonlConfig(("native-runner",)),
+                    CodexJsonlDependencies(
+                        FixedClock(), lambda: calls.append(True) or Session(codex_payload())
+                    ),
+                )
+
+        validator.assert_called_once_with("native-runner")
+        self.assertEqual([], calls)
     def test_rejects_missing_and_mismatched_dependencies_without_factory_calls(self):
         config = CodexJsonlConfig(("/declared/codex",))
         with self.assertRaises(CompositionError) as raised:

@@ -20,7 +20,6 @@ Flag grammar (all forms are space-separated, ``--key=value`` is rejected):
 
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
-from os.path import isabs
 import sys
 from typing import Literal, Protocol, TextIO
 
@@ -41,6 +40,7 @@ from limitora import (
     StatusUndetectedResult,
     activate_provider,
 )
+from limitora._runner_path import _is_native_absolute_runner_path
 from limitora.output import render_human, render_json
 
 
@@ -283,7 +283,7 @@ def intent_to_config(intent: CliIntent) -> ProviderConfig:
         if intent.codex is None:  # pragma: no cover - guarded by parse
             raise CompositionError("invalid")
         runner = intent.codex.runner
-        if len(runner) == 1 and isabs(runner[0]):
+        if len(runner) == 1 and _is_native_absolute_runner_path(runner[0]):
             runner += ("app-server", "--stdio")
         return CodexJsonlConfig(runner=runner)
     if intent.provider == "opencode-go":

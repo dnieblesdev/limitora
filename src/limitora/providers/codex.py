@@ -4,8 +4,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from importlib import metadata
-from os.path import isabs
 
+from limitora._runner_path import _is_native_absolute_runner_path
 from limitora.models import (MetricKind, ProviderId, ProviderSnapshot, ProviderState, ProviderStatus,
                              Quantity, QuotaWindow, RateLimitResetCredit, RateLimitResetCreditsSummary,
                              RateLimitResetCreditStatus, RateLimitResetType, SourceMetadata,
@@ -56,7 +56,7 @@ class CodexProvider:
     def provider_id(self) -> ProviderId: return _PROVIDER_ID
 
     def detect(self) -> ProviderDetection:
-        configured = (bool(self._runner) and isabs(self._runner[0])
+        configured = (bool(self._runner) and _is_native_absolute_runner_path(self._runner[0])
                       and all(isinstance(part, str) and part.strip() == part and part for part in self._runner))
         return ProviderDetection(_PROVIDER_ID, configured, self._clock.now(), None if configured else "Codex runner is not configured")
 

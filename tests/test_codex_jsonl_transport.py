@@ -9,6 +9,7 @@ from __future__ import annotations
 import unittest
 from datetime import timedelta
 from typing import Callable
+from unittest.mock import patch
 
 from limitora.providers._codex_jsonl_protocol import _CodexJsonlFailure, _CodexJsonlFailureKind
 from limitora.providers._codex_jsonl_transport import (
@@ -171,6 +172,37 @@ class PopenProcessContractTests(unittest.TestCase):
     def test_popen_process_rejects_relative_runner(self):
         with self.assertRaises(OSError):
             _PopenProcess(("codex",))
+
+    def test_popen_process_validates_before_launch(self):
+        with patch(
+            "limitora.providers._codex_jsonl_transport._is_native_absolute_runner_path",
+            return_value=False,
+        ) as validator, patch(
+            "limitora.providers._codex_jsonl_transport.subprocess.Popen"
+        ) as popen:
+            with self.assertRaises(OSError):
+                _PopenProcess(("native-runner", "opaque-argument"))
+
+        validator.assert_called_once_with("native-runner")
+        popen.assert_not_called()
+
+    def test_popen_process_preserves_exact_argv_without_shell(self):
+        command = ("native-runner", "app-server", "--stdio")
+        with patch(
+            "limitora.providers._codex_jsonl_transport._is_native_absolute_runner_path",
+            return_value=True,
+        ), patch(
+            "limitora.providers._codex_jsonl_transport.subprocess.Popen"
+        ) as popen:
+            _PopenProcess(command)
+
+        popen.assert_called_once_with(
+            command,
+            stdin=-1,
+            stdout=-1,
+            stderr=-3,
+            shell=False,
+        )
 
     def test_popen_factory_exposes_start(self):
         factory = _PopenFactory()

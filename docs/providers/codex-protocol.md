@@ -182,9 +182,12 @@ The session is redaction-strict:
   bytes it failed to parse.
 * ``stderr`` is connected to ``subprocess.DEVNULL``; raw process
   output never lands in diagnostics.
-* ``_PopenProcess`` requires the runner to be an absolute path
-  (``runner[0].startswith("/")``); relative or empty runners are
-  rejected with ``OSError`` before ``subprocess.Popen`` runs.
+* ``_PopenProcess`` requires a native absolute runner path. POSIX accepts
+  POSIX absolute paths; Windows accepts drive-qualified and complete UNC
+  paths, but rejects POSIX paths, drive-relative or rooted-without-drive
+  paths, incomplete UNC paths, and device namespaces. Invalid runners are
+  rejected with ``OSError`` before ``subprocess.Popen`` runs. This path-only
+  PR1 contract does not change pipe reading or process cleanup.
 
 These rules describe safe failure, not provider stability: unauthorized,
 rate-limited, unavailable, incompatible, malformed, or over-bounded input is

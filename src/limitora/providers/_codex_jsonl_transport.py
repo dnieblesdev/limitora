@@ -12,6 +12,8 @@ import subprocess
 import time
 from typing import Callable, Optional, Protocol
 
+from limitora._runner_path import _is_native_absolute_runner_path
+
 from ._codex_jsonl_protocol import _CodexJsonlFailure, _CodexJsonlFailureKind
 
 
@@ -53,7 +55,7 @@ class _PopenProcess:
     """
 
     def __init__(self, command: tuple[str, ...]) -> None:
-        if not command[0].startswith("/"):
+        if not command or not _is_native_absolute_runner_path(command[0]):
             raise OSError("runner must be an explicit path")
         self._child = subprocess.Popen(
             command,
