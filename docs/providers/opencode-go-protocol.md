@@ -14,7 +14,7 @@ additional product context, not a private dashboard payload.
 | Product identity | OpenCode Go is treated as a commercial quota source, distinct from the Go language and from upstream model providers. |
 | Activation | The provider is opt-in and requires a workspace identifier, an endpoint fixed to `https://opencode.ai`, a positive timeout no greater than 10 seconds, and user-supplied authorization. |
 | Default policy | `DENY_AUTHORIZED_SOURCE` fails before transport; the adapter does not discover local credentials or silently authorize a request. |
-| Transport | The optional `httpx` dependency is scoped to the `opencode-go` extra; redirects and ambient proxy/environment configuration are disabled. |
+| Transport | The optional `httpx` dependency is scoped to the `opencode-go` extra; redirects and ambient proxy/environment configuration are disabled. The configured timeout applies to HTTPX connect, read, write, and pool operations and to a Limitora-owned monotonic total budget. |
 
 ## Request and observed response shape
 
@@ -52,13 +52,20 @@ label, upstream provider limit, or HTTP status does not create a quota value.
 | HTTP transport timeout or unavailability | Typed `TRANSPORT` failure; retryable where the contract permits |
 | Redirect or other non-2xx response | Typed unsupported failure; no redirect following |
 | HTML login page, malformed JSON, invalid field, or no valid window | Typed parse failure; partial data is retained only when at least one sibling window is valid |
-| Response body at or above 512 KiB or request budget over 10 seconds | Bounded transport failure; no unbounded read or diagnostic payload |
+| Response body at or above 512 KiB or configured request budget exhausted | Bounded transport failure; no further response chunks are processed |
 
 An absent, null, malformed, or unsupported window is not converted to zero.
 If every candidate window is invalid, the provider fails closed rather than
 returning fabricated quota data. Error messages are constant safe summaries;
 credentials, cookies, private response bodies, tracebacks, and raw transport
 diagnostics are excluded.
+
+HTTPX synchronous timeouts are per-operation inactivity limits, not a strict
+wall-clock cancellation deadline. Limitora checks its monotonic total budget
+before request execution and whenever response handling returns control,
+including before processing each streamed chunk. These checks prevent continued
+processing after expiry, but cannot instantaneously interrupt a synchronous
+operation while it is blocked inside HTTPX.
 
 ## Evidence boundary
 

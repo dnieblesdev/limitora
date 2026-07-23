@@ -13,6 +13,7 @@ from .ports import HttpRequest, HttpResponse, PortFailure, PortFailureKind
 class _HttpxOpenCodeGoTransport:
     BODY_LIMIT = 512 * 1024
     BUDGET = 10.0
+    TIMEOUT_FAILURE = PortFailure(PortFailureKind.TIMEOUT, "OpenCode Go request budget expired")
 
     def __init__(self, config, *, monotonic: Callable[[], float] = time.monotonic,
                  client_factory=None, httpx_module=None) -> None:
@@ -37,11 +38,11 @@ class _HttpxOpenCodeGoTransport:
     def fetch(self) -> HttpResponse | PortFailure:
         if not self._valid_config():
             return PortFailure(PortFailureKind.INVALID, "OpenCode Go configuration is invalid")
-        deadline = self._monotonic() + self.BUDGET
-        if self._remaining(deadline) <= 0:
-            return PortFailure(PortFailureKind.TIMEOUT, "OpenCode Go request budget expired")
+        deadline = self._monotonic() + self._config.timeout.total_seconds()
         request = self._request()
         remaining = self._remaining(deadline)
+        if remaining <= 0:
+            return self.TIMEOUT_FAILURE
         try:
             httpx = self._httpx_module
             if httpx is None:
@@ -49,7 +50,11 @@ class _HttpxOpenCodeGoTransport:
             timeout = httpx.Timeout(remaining, connect=remaining, read=remaining, write=remaining, pool=remaining)
             factory = self._client_factory or httpx.Client
             with factory(follow_redirects=False, trust_env=False, timeout=timeout) as client:
+                if self._remaining(deadline) <= 0:
+                    return self.TIMEOUT_FAILURE
                 with client.stream(request.method, request.url, headers=dict(request.headers), content=None) as response:
+                    if self._remaining(deadline) <= 0:
+                        return self.TIMEOUT_FAILURE
                     declared = response.headers.get("content-length")
                     if declared is not None and declared.isdigit():
                         failure = self._body_failure(int(declared))
@@ -58,15 +63,15 @@ class _HttpxOpenCodeGoTransport:
                     chunks: list[bytes] = []
                     size = 0
                     for chunk in response.iter_bytes():
+                        if self._remaining(deadline) <= 0:
+                            return self.TIMEOUT_FAILURE
                         size += len(chunk)
                         failure = self._body_failure(size)
                         if failure is not None:
                             return failure
                         chunks.append(chunk)
-                        if self._remaining(deadline) <= 0:
-                            return PortFailure(PortFailureKind.TIMEOUT, "OpenCode Go request budget expired")
                     if self._remaining(deadline) <= 0:
-                        return PortFailure(PortFailureKind.TIMEOUT, "OpenCode Go request budget expired")
+                        return self.TIMEOUT_FAILURE
                     return HttpResponse(response.status_code, b"".join(chunks))
         except ImportError:
             return PortFailure(PortFailureKind.UNAVAILABLE, "OpenCode Go HTTP transport is unavailable")
