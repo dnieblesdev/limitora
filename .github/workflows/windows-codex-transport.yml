@@ -4,7 +4,11 @@ on:
     paths:
       - "src/limitora/providers/*codex*.py"
       - "src/limitora/_runner_path.py"
+      - "src/limitora/cli/__init__.py"
+      - "src/limitora/composition.py"
       - "tests/test_codex*.py"
+      - "tests/test_cli.py"
+      - "tests/test_provider_composition.py"
       - "tests/test_runner_path.py"
       - ".github/workflows/windows-codex-transport.yml"
   workflow_dispatch:
@@ -24,4 +28,4 @@ jobs:
         run: |
           $env:PYTHONDONTWRITEBYTECODE = "1"
           $env:PYTHONPATH = "src"
-          python -m unittest tests.test_codex_jsonl_transport tests.test_codex_jsonl_protocol tests.test_codex_jsonl tests.test_codex_jsonl_mapping tests.test_codex_provider tests.test_runner_path -v
+          python -m unittest tests.test_codex_jsonl_transport tests.test_codex_jsonl_protocol tests.test_codex_jsonl tests.test_codex_jsonl_mapping tests.test_codex_provider tests.test_cli tests.test_provider_composition tests.test_runner_path -v

@@ -19,6 +19,7 @@ from limitora.cli import (
     intent_to_config, main, parse,
 )
 from limitora.models import Quantity, QuotaWindow, UsageSnapshot, ValueAvailability, WindowKind
+from tests._native_runner import NATIVE_RUNNER
 
 
 UTC = timezone.utc
@@ -29,7 +30,7 @@ EXPECTED_REQUEST = StatusRequest(
     AuthorizationPolicy.DENY_AUTHORIZED_SOURCE,
     FreshnessPolicy(timedelta(minutes=5)),
 )
-CODEX_RUNNER = ("/declared/codex", "app-server", "--stdio")
+CODEX_RUNNER = (*NATIVE_RUNNER, "app-server", "--stdio")
 
 
 def snapshot(*, freshness=Freshness.FRESH, windows=(), usage=None):
@@ -331,7 +332,7 @@ class IntentToConfigUnitTests(unittest.TestCase):
     def test_single_absolute_codex_runner_adds_app_server_stdio_defaults(self):
         intent = CliIntent(
             provider="codex",
-            codex=CodexIntent(runner=("/declared/codex",)),
+            codex=CodexIntent(runner=NATIVE_RUNNER),
         )
 
         config = intent_to_config(intent)
@@ -391,7 +392,7 @@ class CodexActivationTests(unittest.TestCase):
     def test_codex_path_activates_provider_and_renders_human(self):
         fake = FakeClient(snapshot())
         code, output, errors, client, mock_activate = invoke_with_provider(
-            ["status", "--provider", "codex", "--runner", "/declared/codex"],
+            ["status", "--provider", "codex", "--runner", NATIVE_RUNNER[0]],
             fake,
         )
         self.assertEqual(0, code)
@@ -404,7 +405,7 @@ class CodexActivationTests(unittest.TestCase):
     def test_authorization_defaults_to_deny_for_codex(self):
         fake = FakeClient(snapshot())
         code, output, errors, _, _ = invoke_with_provider(
-            ["status", "--provider", "codex", "--runner", "/declared/codex"],
+            ["status", "--provider", "codex", "--runner", NATIVE_RUNNER[0]],
             fake,
         )
         self.assertEqual(0, code)
@@ -416,7 +417,7 @@ class CodexActivationTests(unittest.TestCase):
         fake = FakeClient(snapshot())
         code, output, errors, _, _ = invoke_with_provider(
             [
-                "status", "--provider", "codex", "--runner", "/declared/codex",
+                "status", "--provider", "codex", "--runner", NATIVE_RUNNER[0],
                 "--codex-allow-authorized-source",
             ],
             fake,
@@ -432,7 +433,7 @@ class JsonRoutingTests(unittest.TestCase):
         fake = FakeClient(snapshot())
         code, output, errors, _, mock_activate = invoke_with_provider(
             [
-                "status", "--provider", "codex", "--runner", "/declared/codex",
+                "status", "--provider", "codex", "--runner", NATIVE_RUNNER[0],
                 "--runner", "app-server", "--runner", "--stdio", "--json",
             ],
             fake,
@@ -447,7 +448,7 @@ class JsonRoutingTests(unittest.TestCase):
     def test_json_stale_status_writes_document_and_exit_three(self):
         fake = FakeClient(snapshot(freshness=Freshness.STALE))
         code, output, errors, _, _ = invoke_with_provider(
-            ["status", "--json", "--provider", "codex", "--runner", "/declared/codex"],
+            ["status", "--json", "--provider", "codex", "--runner", NATIVE_RUNNER[0]],
             fake,
         )
         self.assertEqual(3, code)
@@ -457,7 +458,7 @@ class JsonRoutingTests(unittest.TestCase):
     def test_json_undetected_writes_envelope(self):
         fake = FakeClient(StatusUndetectedResult())
         code, output, errors, _, _ = invoke_with_provider(
-            ["status", "--json", "--provider", "codex", "--runner", "/declared/codex"],
+            ["status", "--json", "--provider", "codex", "--runner", NATIVE_RUNNER[0]],
             fake,
         )
         self.assertEqual(0, code)
@@ -469,7 +470,7 @@ class JsonRoutingTests(unittest.TestCase):
         fake = FakeClient(error)
         code, output, errors, _, _ = invoke_with_provider(
             [
-                "status", "--json", "--provider", "codex", "--runner", "/declared/codex",
+                "status", "--json", "--provider", "codex", "--runner", NATIVE_RUNNER[0],
                 "--codex-allow-authorized-source",
             ],
             fake,
@@ -485,7 +486,7 @@ class JsonRoutingTests(unittest.TestCase):
         fake = FakeClient(error)
         code, output, errors, _, _ = invoke_with_provider(
             [
-                "status", "--provider", "codex", "--runner", "/declared/codex",
+                "status", "--provider", "codex", "--runner", NATIVE_RUNNER[0],
                 "--codex-allow-authorized-source",
             ],
             fake,
