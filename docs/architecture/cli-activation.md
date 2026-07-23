@@ -125,7 +125,7 @@ def activate_provider(
 ) -> StatusClient: ...
 ```
 
-- Lives in `limitora.composition`. Not re-exported from the root.
+- Is implemented in `limitora.composition` and exported from the stable `limitora` root with the closed config and composition error types.
 - The **only** module that imports `_codex_jsonl` and
   `_opencode_go_httpx`.
 - Dispatches on the `ProviderConfig` discriminator and constructs the
@@ -155,10 +155,12 @@ never executes runners. This boundary is enforced by a contract test in
 | JSON `error` envelope carries only `kind`, `provider_id`, `safe_message`, `retryable` | `tests/test_output.py::ErrorSanitizationTests` and `tests/test_cli.py::JsonRoutingTests` |
 | Auth cookie never appears in any captured stream for the OpenCode Go path (default DENY, ALLOW, and `--json`) | `tests/test_cli.py::PrivacyContractTests` |
 | Composition `safe_message` is a redacted constant; credentials and provider payloads are never echoed | `tests/test_provider_composition.py::test_errors_are_constant_and_redacted` |
+| Config and intent representations omit `workspace_id` and `auth_cookie`; HTTP request representations omit URL, headers, and body | `tests/test_public_library_api.py`, `tests/test_cli.py`, and `tests/test_opencode_go_httpx.py` |
 
 The CLI is the only module that touches argv. The `intent_to_config`
 mapper is a pure data function: no I/O, no logging, no printing.
-Cookies and runners reach the transport only through the private
+Consumers own environment access and pass credentials explicitly;
+Limitora performs no environment lookup. Cookies and runners reach the transport only through the private
 adapter modules, which place them in `Cookie:` request headers or
 subprocess argv — never in user-visible output.
 

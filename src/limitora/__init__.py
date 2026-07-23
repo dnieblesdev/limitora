@@ -14,6 +14,14 @@ from .api import (
     StatusSnapshotResult,
     StatusUndetectedResult,
 )
+from .composition import (
+    CodexJsonlConfig,
+    CompositionError,
+    CompositionErrorKind,
+    OpenCodeGoConfig,
+    ProviderConfig,
+    activate_provider,
+)
 from .models import (
     MetricKind,
     ProviderId,
@@ -31,15 +39,20 @@ from .providers import AuthorizationPolicy, ProviderError, ProviderErrorKind
 __all__ = [
     "AuthorizationPolicy",
     "Clock",
+    "CodexJsonlConfig",
+    "CompositionError",
+    "CompositionErrorKind",
     "CurrentClock",
     "Freshness",
     "FreshnessPolicy",
     "InvalidProviderSelectionError",
     "InvalidStatusRequestError",
     "MetricKind",
+    "OpenCodeGoConfig",
     "ProviderError",
     "ProviderErrorKind",
     "ProviderId",
+    "ProviderConfig",
     "ProviderSnapshot",
     "ProviderState",
     "ProviderStatus",
@@ -54,4 +67,5 @@ __all__ = [
     "StatusResult",
     "StatusSnapshotResult",
     "StatusUndetectedResult",
+    "activate_provider",
 ]

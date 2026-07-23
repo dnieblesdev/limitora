@@ -2,25 +2,26 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from os.path import isabs
 from enum import Enum
-from typing import Callable, Literal, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Callable, Literal, Protocol, TypeAlias
 
-from .api import CurrentClock, StatusClient
-from .providers.cache import CachedProviderReader, ProviderCachePolicy
-from .providers.ports import Clock
-from .providers._opencode_go import OpenCodeGoConfig as AdapterOpenCodeGoConfig, OpenCodeGoProvider
-from .providers.codex import CodexProvider
+from .api import Clock, CurrentClock, StatusClient
+
+if TYPE_CHECKING:
+    from .providers.cache import ProviderCachePolicy
+
+
 @dataclass(frozen=True)
 class CodexJsonlConfig:
     runner: tuple[str, ...] = ()
     provider: Literal["codex"] = "codex"
 @dataclass(frozen=True)
 class OpenCodeGoConfig:
-    workspace_id: str
-    auth_cookie: str
+    workspace_id: str = field(repr=False)
+    auth_cookie: str = field(repr=False)
     provider: Literal["opencode-go"] = "opencode-go"
     endpoint: str = "https://opencode.ai"
     timeout: timedelta = timedelta(seconds=10)
@@ -93,6 +94,8 @@ def build_status_client(
     cache_policy: ProviderCachePolicy | None = None,
     ) -> StatusClient:
     """Build exactly one selected provider from explicit validated inputs."""
+    from .providers.cache import ProviderCachePolicy
+
     if not enabled:
         _fail(CompositionErrorKind.DISABLED)
     if config is None or dependencies is None:
@@ -100,6 +103,8 @@ def build_status_client(
     if cache_policy is not None and type(cache_policy) is not ProviderCachePolicy:
         _fail(CompositionErrorKind.INVALID)
     if type(config) is CodexJsonlConfig:
+        from .providers.codex import CodexProvider
+
         if not _valid_codex(config):
             _fail(CompositionErrorKind.INVALID)
         if not isinstance(dependencies, CodexJsonlDependencies):
@@ -112,6 +117,11 @@ def build_status_client(
         provider = CodexProvider(config.runner, dependencies.clock, session)
         return StatusClient(_cached(provider, cache_policy, dependencies.clock), dependencies.clock)
     if type(config) is OpenCodeGoConfig:
+        from .providers._opencode_go import (
+            OpenCodeGoConfig as AdapterOpenCodeGoConfig,
+            OpenCodeGoProvider,
+        )
+
         if not _valid_opencode(config):
             _fail(CompositionErrorKind.INVALID)
         if not isinstance(dependencies, OpenCodeGoDependencies):
@@ -128,6 +138,8 @@ def build_status_client(
 
 
 def _cached(provider, policy, clock):
+    from .providers.cache import CachedProviderReader
+
     return provider if policy is None else CachedProviderReader(provider, policy, clock)
 
 

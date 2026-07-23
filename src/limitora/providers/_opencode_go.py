@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import json
@@ -24,8 +24,8 @@ class _OpenCodeGoTransport(Protocol):
 
 @dataclass(frozen=True)
 class OpenCodeGoConfig:
-    workspace_id: str
-    auth_cookie: str
+    workspace_id: str = field(repr=False)
+    auth_cookie: str = field(repr=False)
     endpoint: str
     timeout: timedelta
 

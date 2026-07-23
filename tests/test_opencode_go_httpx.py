@@ -65,12 +65,33 @@ class OpenCodeGoHttpxTests(unittest.TestCase):
         return OpenCodeGoConfig(**values)
 
     def test_builds_the_exact_private_request_without_leaking_cookie(self):
-        transport = _HttpxOpenCodeGoTransport(self.config())
+        sentinel = "unique-sensitive-sentinel"
+        transport = _HttpxOpenCodeGoTransport(self.config(
+            workspace_id=sentinel, auth_cookie=sentinel
+        ))
         request = transport._request()
 
-        self.assertEqual("https://opencode.ai/workspace/space%2Fid/go", request.url)
-        self.assertEqual(("Cookie", "auth=opaque"), request.headers[0])
+        self.assertEqual(f"https://opencode.ai/workspace/{sentinel}/go", request.url)
+        self.assertEqual(("Cookie", f"auth={sentinel}"), request.headers[0])
         self.assertIsNone(request.body)
+        self.assertNotIn(sentinel, repr(request))
+
+    def test_request_repr_hides_url_headers_and_body(self):
+        sentinel = b"unique-request-body-sentinel"
+        request = self.config()
+        from limitora.providers.ports import HttpRequest
+
+        represented = repr(HttpRequest(
+            "POST",
+            "https://opencode.ai/workspace/unique-workspace-sentinel/go",
+            (("Cookie", "auth=unique-cookie-sentinel"),),
+            sentinel,
+            request.timeout,
+        ))
+
+        self.assertNotIn("unique-workspace-sentinel", represented)
+        self.assertNotIn("unique-cookie-sentinel", represented)
+        self.assertNotIn("unique-request-body-sentinel", represented)
 
     def test_invalid_config_and_expired_budget_short_circuit(self):
         invalid = _HttpxOpenCodeGoTransport(self.config(endpoint="https://evil.example"))

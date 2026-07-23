@@ -24,25 +24,24 @@ from os.path import isabs
 import sys
 from typing import Literal, Protocol, TextIO
 
-from limitora.api import (
+from limitora import (
+    AuthorizationPolicy,
+    Clock,
+    CodexJsonlConfig,
+    CompositionError,
     CurrentClock,
     Freshness,
     FreshnessPolicy,
+    MetricKind,
+    OpenCodeGoConfig,
+    ProviderConfig,
+    ProviderError,
     StatusRequest,
     StatusSnapshotResult,
     StatusUndetectedResult,
-)
-from limitora.composition import (
-    CodexJsonlConfig,
-    CompositionError,
-    OpenCodeGoConfig,
-    ProviderConfig,
     activate_provider,
 )
-from limitora.models import MetricKind
 from limitora.output import render_human, render_json
-from limitora.providers import AuthorizationPolicy, ProviderError
-from limitora.providers.ports import Clock
 
 
 _HELP = (
@@ -103,8 +102,8 @@ class CodexIntent:
 class OpenCodeGoIntent:
     """Intermediate representation for the ``opencode-go`` provider flags."""
 
-    workspace_id: str = ""
-    auth_cookie: str = ""
+    workspace_id: str = field(default="", repr=False)
+    auth_cookie: str = field(default="", repr=False)
     endpoint: str = _DEFAULT_ENDPOINT
     timeout_seconds: int = _DEFAULT_TIMEOUT_SECONDS
     allow_authorized_source: bool = False

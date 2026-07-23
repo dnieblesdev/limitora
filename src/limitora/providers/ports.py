@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import Protocol
@@ -17,9 +17,9 @@ class Clock(Protocol):
 @dataclass(frozen=True)
 class HttpRequest:
     method: str
-    url: str
-    headers: tuple[tuple[str, str], ...]
-    body: bytes | None
+    url: str = field(repr=False)
+    headers: tuple[tuple[str, str], ...] = field(repr=False)
+    body: bytes | None = field(repr=False)
     timeout: timedelta
 
 
