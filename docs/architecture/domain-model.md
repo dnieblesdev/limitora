@@ -1,20 +1,22 @@
 # Provider-status domain model
 
-**Decision:** model provider observations as typed, timestamped evidence. Missing data is explicit and is never represented as `0%`.
+**Current contract:** shipped models represent provider observations as typed, timestamped evidence. Missing data is explicit and is never represented as `0%`.
 
-## Minimal conceptual model
+## Shipped model types
 
 | Concept | Purpose | Required conceptual fields |
 |---|---|---|
-| `ProviderStatus` | The latest outcome for one provider observation. | provider identifier; state; observed-at time; optional typed error; optional snapshot |
-| `QuotaWindow` | One named allowance or technical-limit window. | kind; scope; period; limit value; used value; remaining value; reset time; value availability; source reference |
-| `ProviderSnapshot` | A provider-scoped set of observations captured at one point in time. | provider identifier; observed-at time; status; quota windows; optional usage snapshot; source metadata |
+| `ProviderStatus` | The latest outcome for one provider observation. | provider identifier; state; observed-at time |
+| `QuotaWindow` | One named allowance or technical-limit window. | kind; scope; period; optional plan identifier; limit value; used value; remaining value; reset time; value availability; source reference |
+| `ProviderSnapshot` | A provider-scoped set of observations captured at one point in time. | provider identifier; fetched-at time; data-at time; status; quota windows; optional usage snapshot; optional rate-limit reset-credit summary; source metadata |
 | `UsageSnapshot` | A provider-scoped account or product usage observation that is not implicitly a quota window. | observed-at time; token-use values when evidenced; balance when evidenced; used/remaining percentage only when derivable; availability and source metadata |
 | `RateLimitResetCreditsSummary` | Optional account inventory for resetting eligible rate limits. | non-negative available count; nullable immutable credit details |
 | `RateLimitResetCredit` | One privacy-safe reset-credit detail. | typed reset kind and status; aware grant/optional expiration times; optional title and description |
 
 `QuotaWindow.kind` distinguishes `commercial_quota` from `technical_rate_limit`. They may coexist for one provider and must never overwrite each other.
+`QuotaWindow.plan_id` identifies the commercial plan when one is evidenced; it may be absent only for the authorized planless OpenCode Go source.
 Reset-credit inventory is snapshot metadata, not a quota window or usage value. Opaque provider credit identifiers are never modeled.
+`ProviderSnapshot.rate_limit_reset_credits` is an optional typed summary containing a non-negative available count and nullable immutable credit details; it is technical rate-limit metadata, not commercial quota.
 
 ## State semantics
 
@@ -60,6 +62,6 @@ A global aggregate must exclude a provider snapshot when **any** of these condit
 
 An aggregate must report its included provider identifiers, exclusions with reasons, and its own `partial` state whenever any requested provider is excluded. It must not normalize different commercial plans, technical windows, credits, balances, or token-use metrics into a single percentage.
 
-## Non-goals
+## Boundary
 
-This is a conceptual model only. It introduces no storage format, provider adapter, network behavior, command execution, cache, UI, CLI, YASB integration, or configuration change.
+These are domain contracts, not storage or transport contracts. Provider adapters, composition, cache policy, output, CLI, UI, and YASB integration remain separate boundaries. `StatusClient` evaluates snapshot freshness; the domain models do not perform I/O.

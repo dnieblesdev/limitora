@@ -1,20 +1,21 @@
 # Limitora architecture
 
-This document describes the direction and boundaries for the Limitora library.
+This document describes the shipped architecture and its boundaries for the Limitora library.
 
-## Direction
+## Current shape
 
-Limitora is a plain Python library that talks to LLM providers. It does not run a daemon, open a local HTTP port, or use IPC in the first MVP. Later versions may add direct import-based integrations, but any network or process boundary will be opt-in and documented.
+Limitora is a plain Python library that reads provider status through explicit composition. It does not run a daemon, open a local HTTP port, or use IPC. Network, command, and authorized-session boundaries are opt-in through the selected adapter.
 
 ## Boundaries
 
 | Layer | Responsibility | What it must NOT do |
 |-------|----------------|---------------------|
-| `limitora.core` | Coordinate requests, enforce rate limits, manage provider selection | Import UI frameworks or session managers |
-| `limitora.models` | Define stable request/response contracts | Depend on provider SDKs |
-| `limitora.providers` | Adapt provider-specific APIs to Limitora models | Leak tokens, cookies, sessions, or credentials |
-| `limitora.cache` | Optional local persistence with redaction first | Store unredacted secrets |
-| `limitora.cli` | Thin command-line wrapper that emits JSON | Embed UI logic |
+| `limitora.api` | Stable typed requests, clients, and freshness results | Expose adapter or transport details |
+| `limitora.core` | Coordinate detection and provider snapshot reads | Import UI frameworks or session managers |
+| `limitora.models` | Define stable typed domain contracts | Depend on provider SDKs |
+| `limitora.providers` | Define contracts, safe errors, cache, and adapters | Leak tokens, cookies, sessions, or credentials |
+| `limitora.composition` | Validate explicit configuration and select one provider | Discover credentials or silently fall back |
+| `limitora.output` / `limitora.cli` | Project results; parse flags, own streams and exits | Calculate state, instantiate adapters, or embed UI logic |
 
 ## Integration rules
 
@@ -24,7 +25,7 @@ Limitora is a plain Python library that talks to LLM providers. It does not run 
 
 ## API stability
 
-The first stable public API will be defined in `limitora.core` and `limitora.models`. Provider modules may change as provider APIs evolve; consumers should go through the core coordinator rather than calling provider modules directly.
+The stable public API is rooted in `limitora` and includes `StatusClient`, `StatusRequest`, freshness types, provider-neutral models, and safe provider errors. Provider modules and composition details may change as sources evolve; consumers must not depend on private adapters.
 
 ## MVP constraints
 

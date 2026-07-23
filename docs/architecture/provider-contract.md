@@ -1,42 +1,47 @@
 # Provider contract for evidence-backed snapshots
 
-**Recommendation:** define a small synchronous `Protocol` for provider acquisition and inject all side-effect boundaries. Return a `ProviderSnapshot` for successful or partial observations; reserve typed errors for outcomes that prevent a trustworthy snapshot.
+**Current contract:** Limitora ships a small synchronous `ProviderReader` protocol with separate detection and fetching. Side-effect boundaries are injected into adapters. A successful or partial read returns `ProviderSnapshot`; a `ProviderError` represents an outcome that prevents a trustworthy snapshot.
 
-This is a conceptual contract, not an implementation.
+Codex JSONL and OpenCode Go adapters implement this contract behind explicit composition; their transports and credentials are private.
 
 ## Contract shape
 
 ```text
 ProviderReader
   provider_id: ProviderId
-  read_status(request: StatusRequest) -> ProviderSnapshot | ProviderReadError
+  detect() -> ProviderDetection
+  fetch(request: ProviderRequest) -> ProviderSnapshot
 
-StatusRequest
-  requested_metrics: set[MetricKind]
-  freshness_policy: FreshnessPolicy
+ProviderRequest
+  requested_metrics: frozenset[MetricKind]
   authorization_policy: AuthorizationPolicy
 
 ProviderSnapshot
   provider_id
-  observed_at
+  fetched_at
+  data_at
   status: ProviderStatus
   quota_windows: sequence[QuotaWindow]
   usage: optional UsageSnapshot
+  rate_limit_reset_credits: optional RateLimitResetCreditsSummary
   source: SourceMetadata
 
-ProviderReadError
-  kind: ErrorKind
+ProviderError
+  kind: ProviderErrorKind
   provider_id
   safe_message
   retryable
-  cause_category
 ```
+
+`StatusRequest` is the public API/client request; its `freshness_policy` is handled there and is not part of provider-boundary `ProviderRequest`.
 
 The contract permits partial data: a reader may return a `ProviderSnapshot` with `ProviderStatus.state = partial` when independently validated fields exist alongside explicit absences. It must not convert unsupported or missing data to numeric zero.
 
+`ProviderSnapshot.rate_limit_reset_credits` is optional technical rate-limit metadata. When present, its `available_count` is non-negative and its `credits` is either nullable or an immutable sequence; absent or explicit-null provider details remain absent, while an explicit empty list remains empty. Each credit exposes typed reset/status values and timezone-aware grant and optional expiration timestamps without retaining opaque provider identifiers.
+
 ## Typed errors and safe diagnostics
 
-| `ErrorKind` | Meaning | Retryable | Safe error rule |
+| `ProviderErrorKind` | Meaning | Retryable | Safe error rule |
 |---|---|---:|---|
 | `not_configured` | The reader has no approved source configuration. | No | Name the provider and required configuration category only. |
 | `unauthorized` | The source requires user authorization that is absent or rejected. | No | State authorization is required; exclude credentials and request details. |
@@ -53,14 +58,13 @@ Errors and snapshots must contain neither credentials nor raw authentication art
 
 ## Source adapters
 
-The single contract supports four adapter categories without leaking transport details into consumers:
+The single contract supports these adapter categories without leaking transport details into consumers:
 
 | Adapter category | Responsibility | Deterministic offline test seam |
 |---|---|---|
-| HTTP provider | Translate an approved HTTP response into a snapshot or typed error. | Inject a fake HTTP client returning fixed response objects. |
-| CLI provider | Translate a bounded command result into a snapshot or typed error. | Inject a fake command runner returning fixed exit/result objects. |
-| Local-file provider | Parse an explicitly configured, approved local evidence file. | Inject a fake filesystem returning fixed file bytes or absence. |
-| Static/public provider | Return researched public capability metadata, not account measurements. | Construct in memory with a fixed clock. |
+| Codex JSONL | Translate a bounded authorized app-server exchange into a snapshot or typed error. | Inject a fake session and clock. |
+| OpenCode Go | Translate an explicit bounded HTTP transport response into a snapshot or typed error. | Inject a fake transport and clock. |
+| Test provider | Exercise the contract without external I/O. | Construct `FakeProvider` with fixed outcomes. |
 
 An adapter may support only one category. Provider selection belongs in a composition layer, not in the domain model.
 
@@ -88,11 +92,11 @@ The composition root supplies adapters with narrow dependencies:
 - **Clock:** supplies an instant for observation and freshness evaluation.
 - **Timeout policy:** supplies a bounded deadline or duration for each approved HTTP, CLI, or local-file operation. Expiry maps to a retryable `transport` or `command_failed` error as appropriate; it never yields a fabricated snapshot.
 
-No adapter discovers local authentication artifacts. Authorization policy is explicit in `StatusRequest`, and lack of authorization yields `unauthorized` or `not_authorized`, never a fabricated measurement.
+No adapter discovers local authentication artifacts. Authorization policy is explicit in `ProviderRequest`, and lack of authorization yields `unauthorized`, never a fabricated measurement.
 
 ## Deterministic offline-test scenarios
 
-Future tests should instantiate only fakes and fixed clocks to prove these contract properties:
+Offline contract tests instantiate only fakes and fixed clocks to prove these properties:
 
 1. A complete source yields an `available` snapshot with source metadata.
 2. One unavailable metric yields a `partial` snapshot without a substitute numeric value.
@@ -101,6 +105,6 @@ Future tests should instantiate only fakes and fixed clocks to prove these contr
 5. A malformed local file yields `file_invalid` or `parse_failed` without raw-content leakage.
 6. A global aggregation excludes incompatible, stale, or absent values and reports exclusion reasons.
 
-## Non-goals
+## Boundary and non-goals
 
-No endpoint, command, local path, cache, provider behavior, configuration, CLI, UI, or YASB integration is specified or implemented here.
+This page does not expose endpoints, commands, local paths, cache internals, configuration secrets, CLI behavior, UI, or YASB integration. Adapter diagnostics are mapped to safe typed errors; raw payloads and authentication material never cross the contract.
