@@ -270,8 +270,9 @@ def _cleanup(process: _Process, allowance: timedelta, monotonic: Callable[[], fl
 
     Returns ``PROCESS`` failure on teardown exception, else ``None``.
     """
-    deadline = monotonic() + allowance.total_seconds()
-    remaining = lambda: max(0.0, deadline - monotonic())
+    allowance_seconds = allowance.total_seconds()
+    deadline = monotonic() + allowance_seconds
+    remaining = lambda: max(0.0, min(allowance_seconds, deadline - monotonic()))
     failed = not _attempt(process.close_stdin)
     failed = not _attempt(process.terminate) or failed
     try:
