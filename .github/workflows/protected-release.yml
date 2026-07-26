@@ -1,0 +1,312 @@
+name: Protected release
+on:
+  workflow_dispatch:
+    inputs:
+      candidate-sha:
+        description: Exact 40-character candidate commit SHA
+        required: true
+        type: string
+      expected-version:
+        description: Expected project version
+        required: true
+        type: string
+  push:
+    tags: ["v*"]
+permissions: {}
+concurrency:
+  group: ${{ github.event_name == 'push' && github.ref || format('manual-{0}', github.run_id) }}
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+      artifact-digest: ${{ steps.digest.outputs.value }}
+      source-sha: ${{ steps.source.outputs.source-sha }}
+      version: ${{ steps.source.outputs.version }}
+      tag-name: ${{ steps.source.outputs.tag-name }}
+      trusted-main-sha: ${{ steps.source.outputs.trusted-main-sha }}
+      ledger-sha: ${{ steps.source.outputs.ledger-sha }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event_name == 'push' && github.ref || github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.14"
+      - name: Resolve and validate release identity
+        id: source
+        shell: bash
+        env:
+          CANDIDATE_SHA: ${{ inputs['candidate-sha'] }}
+          EXPECTED_VERSION: ${{ inputs['expected-version'] }}
+        run: |
+          set -euo pipefail
+          git fetch origin main --force --no-tags
+          tag_name= tag_object= source_sha= expected_version= ledger_sha=
+          trusted_main_sha="$(git rev-parse origin/main^{commit})"
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            tag_name="$GITHUB_REF_NAME"
+            test "$GITHUB_REF" = "refs/tags/$tag_name"
+            [[ "$tag_name" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+            test "$(git cat-file -t "refs/tags/$tag_name")" = tag
+            tag_object="$(git rev-parse "refs/tags/$tag_name")"
+            source_sha="$(git rev-parse "refs/tags/$tag_name^{}")"
+            test "$(git cat-file -t "$source_sha")" = commit
+            expected_version="${tag_name#v}"
+          else
+            [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+            source_sha="$CANDIDATE_SHA"
+            expected_version="$EXPECTED_VERSION"
+          fi
+          git cat-file -e "$source_sha^{commit}"
+          git merge-base --is-ancestor "$source_sha" "$trusted_main_sha"
+          git checkout --detach "$source_sha"
+          test "$(git rev-parse HEAD)" = "$source_sha"
+          project_version="$(python -c 'import re; text=open("pyproject.toml", encoding="utf-8").read(); print(re.search(r"^version = \"([^\"]+)\"$", text, re.M).group(1))')"
+          test "$expected_version" = "$project_version"
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            test "$source_sha" != "$trusted_main_sha"
+            git show "$trusted_main_sha:release/ledger.json" > "$RUNNER_TEMP/release-ledger.json"
+            git merge-base --is-ancestor "$source_sha" "$trusted_main_sha"
+            python - "$RUNNER_TEMP/release-ledger.json" "$expected_version" "$source_sha" <<'PY'
+          import json, sys
+          try:
+              with open(sys.argv[1], encoding="ascii") as stream: ledger = json.load(stream)
+          except (OSError, UnicodeError, json.JSONDecodeError) as error:
+              raise SystemExit(f"invalid PR4 ledger: {error}")
+          if not isinstance(ledger, dict) or ledger.get("schema_version") != 1: raise SystemExit("invalid PR4 ledger schema")
+          if ledger.get("version") != sys.argv[2]: raise SystemExit("PR4 ledger version mismatch")
+          if ledger.get("source_sha") != sys.argv[3]: raise SystemExit("PR4 ledger source SHA mismatch")
+          PY
+            ledger_sha="$(sha256sum "$RUNNER_TEMP/release-ledger.json" | cut -d' ' -f1)"
+          fi
+          {
+            printf 'source-sha=%s\n' "$source_sha"
+            printf 'version=%s\n' "$expected_version"
+            printf 'tag-name=%s\n' "$tag_name"
+            printf 'tag-object=%s\n' "$tag_object"
+            printf 'tag-commit=%s\n' "$source_sha"
+            printf 'trusted-main-sha=%s\n' "$trusted_main_sha"
+            printf 'ledger-sha=%s\n' "$ledger_sha"
+          } >> "$GITHUB_OUTPUT"
+      - name: Build and inspect one distribution pair
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.source-sha }}
+          VERSION: ${{ steps.source.outputs.version }}
+          TAG_NAME: ${{ steps.source.outputs.tag-name }}
+          TAG_OBJECT: ${{ steps.source.outputs.tag-object }}
+          TRUSTED_MAIN_SHA: ${{ steps.source.outputs.trusted-main-sha }}
+          LEDGER_SHA: ${{ steps.source.outputs.ledger-sha }}
+        run: |
+          set -euo pipefail
+          python -m pip install -r requirements-compatibility.txt
+          rm -rf dist bundle
+          mkdir bundle
+          python -m build --wheel --sdist --outdir dist
+          wheels=(dist/*.whl); sdists=(dist/*.tar.gz)
+          test "${#wheels[@]}" -eq 1 && test "${#sdists[@]}" -eq 1
+          python scripts/verify_distributions.py dist > bundle/archive-inventory.txt
+          cp "${wheels[0]}" "${sdists[0]}" bundle/
+          mkdir bundle/wheelhouse
+          for python_version in 3.10 3.11 3.12 3.13 3.14; do
+            for platform in manylinux_2_17_x86_64 win_amd64; do
+              python -m pip download --only-binary=:all: --dest bundle/wheelhouse \
+                --platform "$platform" --python-version "$python_version" --implementation cp \
+                --abi "cp${python_version/./}" httpx==0.28.1 setuptools==83.0.0 exceptiongroup==1.3.1 typing_extensions==4.16.0
+            done
+          done
+          printf '%s\n' "$SOURCE_SHA" > bundle/source-sha.txt
+          printf '%s\n' "$VERSION" > bundle/version.txt
+          if [ -n "$TAG_NAME" ]; then cp "$RUNNER_TEMP/release-ledger.json" bundle/release-ledger.json; fi
+          python - "$SOURCE_SHA" "$VERSION" "$TAG_NAME" "$TAG_OBJECT" "$TRUSTED_MAIN_SHA" "$LEDGER_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" <<'PY'
+          import hashlib, json, sys
+          from pathlib import Path
+          root = Path("bundle")
+          artifacts = sorted((*root.glob("*.whl"), *root.glob("*.tar.gz")))
+          wheelhouse = sorted((root / "wheelhouse").glob("*.whl"))
+          wheel = next(path for path in artifacts if path.suffix == ".whl")
+          sdist = next(path for path in artifacts if path.name.endswith(".tar.gz"))
+          files = [*artifacts, *wheelhouse, root / "source-sha.txt"]
+          manifest = "".join(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.relative_to(root).as_posix()}\n" for path in sorted(files, key=lambda path: path.relative_to(root).as_posix()))
+          (root / "manifest.sha256").write_text(manifest, encoding="ascii")
+          receipt = {
+              "schema_version": 1, "source_sha": sys.argv[1], "version": sys.argv[2],
+              "run_id": int(sys.argv[7]), "run_attempt": int(sys.argv[8]),
+              "tag_name": sys.argv[3], "tag_object": sys.argv[4], "tag_commit": sys.argv[1],
+              "ledger_main_sha": sys.argv[5] if sys.argv[3] else "",
+              "wheel_sha256": hashlib.sha256(wheel.read_bytes()).hexdigest(),
+              "sdist_sha256": hashlib.sha256(sdist.read_bytes()).hexdigest(),
+              "manifest_sha256": hashlib.sha256((root / "manifest.sha256").read_bytes()).hexdigest(),
+              "inventory_sha256": hashlib.sha256((root / "archive-inventory.txt").read_bytes()).hexdigest(),
+              "ledger_sha256": sys.argv[6] if sys.argv[3] else "",
+          }
+          (root / "build-receipt.json").write_text(json.dumps(receipt, sort_keys=True) + "\n", encoding="ascii")
+          PY
+      - id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: limitora-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: bundle
+          if-no-files-found: error
+          retention-days: 14
+      - id: digest
+        shell: bash
+        env:
+          RAW_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+        run: normalized="${RAW_DIGEST#sha256:}"; [[ "$normalized" =~ ^[0-9a-f]{64}$ ]]; printf 'value=sha256:%s\n' "$normalized" >> "$GITHUB_OUTPUT"
+  validate:
+    needs: build
+    if: needs.build.result == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.build.outputs.source-sha }}
+          fetch-depth: 1
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Verify artifact service digest before download
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_DIGEST: ${{ needs.build.outputs.artifact-digest }}
+          ARTIFACT_ID: ${{ needs.build.outputs.artifact-id }}
+        shell: bash
+        run: test "$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID" --jq .digest)" = "$EXPECTED_DIGEST"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          path: bundle
+      - name: Verify receipt, manifest, audits, and installed smokes
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ needs.build.outputs.source-sha }}
+          VERSION: ${{ needs.build.outputs.version }}
+          ARTIFACT_ID: ${{ needs.build.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ needs.build.outputs.artifact-digest }}
+          TAG_NAME: ${{ needs.build.outputs.tag-name }}
+          TRUSTED_MAIN_SHA: ${{ needs.build.outputs.trusted-main-sha }}
+          LEDGER_SHA: ${{ needs.build.outputs.ledger-sha }}
+          MATRIX_OS: ${{ matrix.os }}
+          MATRIX_PYTHON: ${{ matrix.python }}
+        run: |
+          set -euo pipefail
+          python - "$SOURCE_SHA" "$VERSION" "$ARTIFACT_ID" "$ARTIFACT_DIGEST" <<'PY'
+          import hashlib, json, os, sys
+          from pathlib import Path
+          root = Path("bundle")
+          receipt = json.loads((root / "build-receipt.json").read_text(encoding="ascii"))
+          assert receipt["schema_version"] == 1
+          assert receipt["source_sha"] == sys.argv[1] and receipt["version"] == sys.argv[2]
+          assert sys.argv[3].isdigit() and sys.argv[4].startswith("sha256:")
+          assert (root / "version.txt").read_text(encoding="ascii") == sys.argv[2] + "\n"
+          assert receipt["run_id"] == int(os.environ["GITHUB_RUN_ID"])
+          assert receipt["run_attempt"] == int(os.environ["GITHUB_RUN_ATTEMPT"])
+          assert (root / "source-sha.txt").read_text(encoding="ascii") == sys.argv[1] + "\n"
+          for name, recorded in (("manifest.sha256", receipt["manifest_sha256"]), ("archive-inventory.txt", receipt["inventory_sha256"])):
+              assert hashlib.sha256((root / name).read_bytes()).hexdigest() == recorded
+          wheel = next(root.glob("*.whl")); sdist = next(root.glob("*.tar.gz"))
+          assert hashlib.sha256(wheel.read_bytes()).hexdigest() == receipt["wheel_sha256"]
+          assert hashlib.sha256(sdist.read_bytes()).hexdigest() == receipt["sdist_sha256"]
+          if os.environ["TAG_NAME"]:
+              ledger = json.loads((root / "release-ledger.json").read_text(encoding="ascii"))
+              assert receipt["tag_name"] == os.environ["TAG_NAME"] and receipt["ledger_main_sha"] == os.environ["TRUSTED_MAIN_SHA"]
+              assert hashlib.sha256((root / "release-ledger.json").read_bytes()).hexdigest() == os.environ["LEDGER_SHA"] == receipt["ledger_sha256"]
+              assert (ledger.get("schema_version"), ledger.get("version"), ledger.get("source_sha")) == (1, sys.argv[2], sys.argv[1])
+          else: assert not (root / "release-ledger.json").exists() and not receipt["ledger_sha256"] and not receipt["ledger_main_sha"]
+          PY
+          mkdir -p dist
+          cp bundle/*.whl bundle/*.tar.gz dist/
+          python scripts/verify_distributions.py dist
+          python - <<'PY'
+          import json, os, subprocess, sys, tempfile
+          from pathlib import Path
+          repo = Path(os.environ["GITHUB_WORKSPACE"]); bundle = repo / "bundle"
+          wheel = next(bundle.glob("*.whl")); sdist = next(bundle.glob("*.tar.gz"))
+          for kind, artifact in (("wheel", wheel), ("sdist", sdist)):
+              work = Path(tempfile.mkdtemp()); env = os.environ.copy()
+              env.pop("PYTHONPATH", None); env.pop("PYTHONHOME", None); env["PYTHONNOUSERSITE"] = "1"
+              venv = work / "venv"; subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True)
+              python = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python"); cli = venv / ("Scripts/limitora.exe" if os.name == "nt" else "bin/limitora")
+              if kind == "sdist": subprocess.run([str(python), "-m", "pip", "install", "--no-index", "--find-links", str(bundle / "wheelhouse"), "setuptools==83.0.0"], check=True)
+              args = [str(python), "-m", "pip", "install", "--no-index", "--find-links", str(bundle / "wheelhouse")]
+              if kind == "wheel": args.append("--no-deps")
+              else: args += ["--no-build-isolation", "--no-deps"]
+              subprocess.run([*args, str(artifact)], check=True)
+              smoke = [str(python), "-I", str(repo / "tests/installed_artifact_smoke.py"), "--artifact", str(artifact), "--manifest", str(bundle / "manifest.sha256"), "--source-sha", str(bundle / "source-sha.txt"), "--expected-source-sha", os.environ["SOURCE_SHA"], "--expected-version", os.environ["VERSION"], "--checkout", str(repo), "--wheelhouse", str(bundle / "wheelhouse"), "--cli", str(cli), "--installation", kind]
+              subprocess.run(smoke, check=True, cwd=work, env=env)
+              subprocess.run([str(python), "-m", "pip", "install", "--no-index", "--find-links", str(bundle / "wheelhouse"), f"{artifact}[opencode-go]"], check=True)
+              subprocess.run([str(python), "-m", "pip", "check"], check=True)
+              subprocess.run([*smoke, "--require-opencode-dependency"], check=True, cwd=work, env=env)
+          build = json.loads((bundle / "build-receipt.json").read_text(encoding="ascii"))
+          receipt = {"artifact_id": os.environ["ARTIFACT_ID"], "artifact_digest": os.environ["ARTIFACT_DIGEST"], "source_sha": os.environ["SOURCE_SHA"], "version": os.environ["VERSION"], "wheel_sha256": build["wheel_sha256"], "sdist_sha256": build["sdist_sha256"], "matrix": {"os": os.environ["MATRIX_OS"], "python": os.environ["MATRIX_PYTHON"]}, "result": "pass"}
+          Path(os.environ["GITHUB_STEP_SUMMARY"]).write_text(json.dumps(receipt, sort_keys=True) + "\n", encoding="ascii")
+          PY
+  publish:
+    needs: [build, validate]
+    if: github.event_name == 'push' && github.ref_type == 'tag' && needs.build.result == 'success' && needs.validate.result == 'success' && github.ref == format('refs/tags/v{0}', needs.build.outputs.version)
+    permissions:
+      id-token: write
+    environment: pypi
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify artifact service digest before download
+        env:
+          EXPECTED_DIGEST: ${{ needs.build.outputs.artifact-digest }}
+          ARTIFACT_ID: ${{ needs.build.outputs.artifact-id }}
+        run: test "$(curl --fail --silent --show-error "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID" | python -c 'import json,sys; print(json.load(sys.stdin)["digest"])')" = "$EXPECTED_DIGEST"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          path: bundle
+      - name: Recheck receipt, ledger, manifest, and hashes
+        env:
+          SOURCE_SHA: ${{ needs.build.outputs.source-sha }}
+          VERSION: ${{ needs.build.outputs.version }}
+          ARTIFACT_ID: ${{ needs.build.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ needs.build.outputs.artifact-digest }}
+          TAG_NAME: ${{ needs.build.outputs.tag-name }}
+          TRUSTED_MAIN_SHA: ${{ needs.build.outputs.trusted-main-sha }}
+          LEDGER_SHA: ${{ needs.build.outputs.ledger-sha }}
+        run: |
+          set -euo pipefail
+          python - "$SOURCE_SHA" "$VERSION" "$ARTIFACT_ID" "$ARTIFACT_DIGEST" <<'PY'
+          import hashlib, json, os, sys
+          from pathlib import Path
+          root = Path("bundle")
+          receipt = json.loads((root / "build-receipt.json").read_text(encoding="ascii"))
+          assert receipt["schema_version"] == 1
+          assert receipt["source_sha"] == sys.argv[1] and receipt["version"] == sys.argv[2]
+          assert sys.argv[3].isdigit() and sys.argv[4].startswith("sha256:")
+          assert (root / "version.txt").read_text(encoding="ascii") == sys.argv[2] + "\n"
+          assert receipt["tag_name"] == os.environ["TAG_NAME"] == "v" + sys.argv[2] and receipt["tag_commit"] == sys.argv[1]
+          assert receipt["ledger_main_sha"] == os.environ["TRUSTED_MAIN_SHA"] and receipt["ledger_sha256"] == os.environ["LEDGER_SHA"]
+          assert hashlib.sha256((root / "manifest.sha256").read_bytes()).hexdigest() == receipt["manifest_sha256"]
+          assert (root / "source-sha.txt").read_text(encoding="ascii") == sys.argv[1] + "\n"
+          wheel = next(root.glob("*.whl")); sdist = next(root.glob("*.tar.gz"))
+          assert hashlib.sha256(wheel.read_bytes()).hexdigest() == receipt["wheel_sha256"]
+          assert hashlib.sha256(sdist.read_bytes()).hexdigest() == receipt["sdist_sha256"]
+          assert hashlib.sha256((root / "release-ledger.json").read_bytes()).hexdigest() == os.environ["LEDGER_SHA"]
+          ledger = json.loads((root / "release-ledger.json").read_text(encoding="ascii"))
+          assert (ledger.get("schema_version"), ledger.get("version"), ledger.get("source_sha")) == (1, sys.argv[2], sys.argv[1])
+          PY
+          mkdir publish
+          cp bundle/*.whl bundle/*.tar.gz publish/
+          test "$(find publish -maxdepth 1 -type f | wc -l)" -eq 2
+      - name: Publish exact distributions with Trusted Publishing
+        uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # v1.14.1
+        with:
+          packages-dir: publish
