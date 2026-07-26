@@ -2,7 +2,17 @@ from pathlib import Path
 import re
 import unittest
 WORKFLOW = Path(__file__).parents[1] / ".github/workflows/protected-release.yml"
+PYPROJECT = Path(__file__).parents[1] / "pyproject.toml"
 SHA = re.compile(r"^[0-9a-f]{40}$")
+BUILD_WHEELHOUSE_PACKAGES = "httpx==0.28.1 setuptools==83.0.0 exceptiongroup==1.3.1 typing_extensions==4.16.0 packaging==26.0"
+OFFLINE_PACKAGING_INSTALL = "python -m pip install --disable-pip-version-check --no-index --find-links bundle/wheelhouse packaging==26.0"
+
+
+def job_sections(text):
+    marks = list(re.finditer(r"(?m)^  (build|validate|publish):\n", text))
+    return {mark.group(1): text[mark.start():marks[index + 1].start() if index + 1 < len(marks) else len(text)] for index, mark in enumerate(marks)}
+
+
 def accepts_identity(candidate, tag, annotated, version, project, peeled, trusted, ancestor, checkout, ledger):
     return bool(SHA.fullmatch(candidate)) and (not tag or (re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag) and annotated and tag[1:] == version)) and version == project and peeled == candidate and candidate != trusted and ancestor and checkout == candidate and ledger == (1, version, candidate)
 def accepts_artifact(receipt, artifact_id, digest, manifest, wheel, sdist):
@@ -14,8 +24,7 @@ class ProtectedReleaseContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.text = WORKFLOW.read_text(encoding="ascii")
-        marks = list(re.finditer(r"(?m)^  (build|validate|publish):\n", cls.text))
-        cls.jobs = {mark.group(1): cls.text[mark.start():marks[index + 1].start() if index + 1 < len(marks) else len(cls.text)] for index, mark in enumerate(marks)}
+        cls.jobs = job_sections(cls.text)
         cls.publish = cls.jobs["publish"]
     def require(self, *parts):
         for part in parts:
@@ -54,12 +63,55 @@ class ProtectedReleaseContractTests(unittest.TestCase):
         self.assertIn("fail-fast: false", validate)
         self.assertNotIn("continue-on-error", validate)
         self.assertIn("needs.validate.result == 'success'", self.publish)
+    def _assert_packaging_contract(self, text):
+        jobs = job_sections(text)
+        build = jobs["build"]
+        validate = jobs["validate"]
+        publish = jobs["publish"]
+        self.assertIn(BUILD_WHEELHOUSE_PACKAGES, build)
+        self.assertLess(build.index("python -m pip download"), build.index(BUILD_WHEELHOUSE_PACKAGES))
+        self.assertEqual(validate.count(OFFLINE_PACKAGING_INSTALL), 1)
+        receipt_end = validate.index("\n          PY\n", validate.index("python - \"$SOURCE_SHA\""))
+        offline_install = validate.index(OFFLINE_PACKAGING_INSTALL)
+        distribution_verification = validate.index("python scripts/verify_distributions.py dist")
+        self.assertLess(receipt_end, offline_install)
+        self.assertLess(offline_install, distribution_verification)
+        install_lines = re.findall(r"(?m)^\s*(?:python -m )?pip install[^\n]*", validate + publish)
+        packaging_lines = [line.strip() for line in install_lines if re.search(r"\bpackaging(?:[<>=!~]|\s|$)", line)]
+        self.assertEqual(packaging_lines, [OFFLINE_PACKAGING_INSTALL])
+        self.assertNotIn("python -m pip install -r requirements-compatibility.txt", validate)
+
+    def test_packaging_is_built_and_installed_only_for_orchestration(self):
+        self._assert_packaging_contract(self.text)
+
+    def test_packaging_contract_is_mutation_sensitive(self):
+        mutations = (
+            ("build pin removed", self.text.replace(" packaging==26.0", "", 1)),
+            ("offline install removed", self.text.replace(OFFLINE_PACKAGING_INSTALL, "", 1)),
+            ("pin loosened", self.text.replace("packaging==26.0", "packaging>=26.0", 1)),
+            ("no-index removed", self.text.replace(OFFLINE_PACKAGING_INSTALL, OFFLINE_PACKAGING_INSTALL.replace(" --no-index", ""), 1)),
+            ("find-links source changed", self.text.replace(OFFLINE_PACKAGING_INSTALL, OFFLINE_PACKAGING_INSTALL.replace("bundle/wheelhouse", "bundle"), 1)),
+        )
+        for name, mutated in mutations:
+            with self.subTest(name=name), self.assertRaises(AssertionError):
+                self._assert_packaging_contract(mutated)
+
+    def test_public_metadata_does_not_depend_on_packaging(self):
+        metadata = PYPROJECT.read_text(encoding="ascii")
+        project = re.search(r"(?ms)^\[project\]\n(.*?)(?=^\[|\Z)", metadata).group(1)
+        optional = re.search(r"(?ms)^\[project\.optional-dependencies\]\n(.*?)(?=^\[|\Z)", metadata).group(1)
+        self.assertRegex(project, r"(?m)^dependencies = \[\]\s*$")
+        self.assertRegex(optional, r'(?m)^opencode-go = \["httpx>=0\.27,<1"\]\s*$')
+        self.assertNotIn("packaging", project + optional)
+
     def test_validate_and_publish_do_not_rebuild(self):
         validate = self.jobs["validate"]
         self.assertNotIn("python -m build", validate + self.publish)
+        self.assertNotRegex(validate, r"(?im)^\s*python -m (?:build|twine|mypy)\b")
         self.assertNotIn("actions/setup-python@", self.publish)
         self.assertNotIn("actions/checkout@", self.publish)
         self.assertNotIn("skip-existing", self.publish)
+        self.assertNotRegex(self.publish, r"(?im)^\s*(?:python -m )?pip (?:install|download)\b")
         self.assertNotRegex(self.publish, r"(?im)^\s*(password|username|token):")
     def test_all_actions_are_full_sha_pinned_and_reviewed(self):
         uses = re.findall(r"uses:\s+([^\s#]+)@([0-9a-f]+)\s+#\s+(v[0-9.]+)", self.text)
