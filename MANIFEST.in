@@ -1,0 +1,2 @@
+include src/limitora/py.typed
+prune tests

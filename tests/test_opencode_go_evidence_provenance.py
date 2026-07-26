@@ -3,7 +3,10 @@
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10 test dependency
+    import tomli as tomllib
 import unittest
 
 from limitora.models import MetricKind
