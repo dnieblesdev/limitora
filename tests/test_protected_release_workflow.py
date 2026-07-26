@@ -36,7 +36,16 @@ class ProtectedReleaseContractTests(unittest.TestCase):
     def test_exact_artifact_handoff_and_receipts(self):
         self.require("artifact-id", "artifact-digest", "steps.digest.outputs.value", "RAW_DIGEST", "normalized=\"${RAW_DIGEST#sha256:}\"", "actions/artifacts/$ARTIFACT_ID", "artifact-ids:", "build-receipt.json", "manifest.sha256", "source_sha", "run_id", "run_attempt", "wheel_sha256", "sdist_sha256", "GITHUB_STEP_SUMMARY")
         self.assertEqual(self.text.count("actions/upload-artifact@"), 1)
-        self.assertGreaterEqual(self.text.count("actions/download-artifact@"), 2)
+        download_uses = re.findall(r"(?m)^      - uses: actions/download-artifact@([0-9a-f]{40}) # v4\.3\.0$", self.text)
+        self.assertEqual(download_uses, ["d3f86a106a0bac45b974a628896c90dbdf5c8093"] * 2)
+        download_block = (
+            "      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0\n"
+            "        with:\n"
+            "          artifact-ids: ${{ needs.build.outputs.artifact-id }}\n"
+            "          merge-multiple: true\n"
+            "          path: bundle\n"
+        )
+        self.assertEqual(self.text.count(download_block), 2)
         self.assertGreaterEqual(self.text.count("actions/artifacts/$ARTIFACT_ID"), 2)
     def test_matrix_is_complete_and_publish_requires_success(self):
         validate = self.jobs["validate"]
@@ -47,7 +56,7 @@ class ProtectedReleaseContractTests(unittest.TestCase):
         self.assertIn("needs.validate.result == 'success'", self.publish)
     def test_validate_and_publish_do_not_rebuild(self):
         validate = self.jobs["validate"]
-        self.assertNotIn("python -m build", validate)
+        self.assertNotIn("python -m build", validate + self.publish)
         self.assertNotIn("actions/setup-python@", self.publish)
         self.assertNotIn("actions/checkout@", self.publish)
         self.assertNotIn("skip-existing", self.publish)
