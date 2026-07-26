@@ -24,6 +24,8 @@ def accepts_artifact(receipt, artifact_id, digest, manifest, wheel, sdist):
 def normalize_digest(raw):
     value = raw.removeprefix("sha256:")
     return f"sha256:{value}" if re.fullmatch(r"[0-9a-f]{64}", value) else None
+def canonical_smoke_source_sha256(source):
+    return hashlib.sha256(source.replace(b"\r\n", b"\n")).hexdigest()
 class ProtectedReleaseContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -132,7 +134,7 @@ class ProtectedReleaseContractTests(unittest.TestCase):
 
     def test_direct_url_smoke_source_is_unchanged_and_fail_closed(self):
         source = SMOKE.read_bytes()
-        self.assertEqual(hashlib.sha256(source).hexdigest(), SMOKE_SHA256)
+        self.assertEqual(canonical_smoke_source_sha256(source), SMOKE_SHA256)
         text = source.decode("ascii")
         for part in (
             'direct_url = distribution.read_text("direct_url.json")',
@@ -141,14 +143,21 @@ class ProtectedReleaseContractTests(unittest.TestCase):
         ):
             self.assertIn(part, text)
 
+    def test_smoke_source_integrity_accepts_lf_and_crlf_only(self):
+        lf = SMOKE.read_bytes().replace(b"\r\n", b"\n")
+        crlf = lf.replace(b"\n", b"\r\n")
+        self.assertNotEqual(lf, crlf)
+        self.assertEqual(canonical_smoke_source_sha256(lf), SMOKE_SHA256)
+        self.assertEqual(canonical_smoke_source_sha256(crlf), SMOKE_SHA256)
+        self.assertEqual(canonical_smoke_source_sha256(b"line\rline"), hashlib.sha256(b"line\rline").hexdigest())
+
     def test_direct_url_contract_is_mutation_sensitive(self):
         source = SMOKE.read_text(encoding="ascii")
         for mutation in (
             source.replace('check(str(checkout).casefold() not in direct_url.casefold(), "direct URL contains checkout path")', "", 1),
             source.replace('not in direct_url.casefold()', 'in direct_url.casefold()', 1),
         ):
-            with self.assertRaises(AssertionError):
-                self.assertEqual(hashlib.sha256(mutation.encode("ascii")).hexdigest(), SMOKE_SHA256)
+            self.assertNotEqual(canonical_smoke_source_sha256(mutation.encode("ascii")), SMOKE_SHA256)
     def test_matrix_is_complete_and_publish_requires_success(self):
         validate = self.jobs["validate"]
         self.assertIn("os: [ubuntu-latest, windows-latest]", validate)
