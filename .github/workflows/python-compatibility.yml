@@ -1,0 +1,64 @@
+name: Python compatibility
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Record interpreter and dependency evidence
+        run: |
+          python --version
+          python -m pip --version
+          python -m pip install "packaging==26.0" "tomli==2.2.1; python_version < '3.11'"
+          python -m pip install --dry-run ".[opencode-go]"
+          python -m pip install ".[opencode-go]"
+          python -m pip check
+          python -m pip list
+      - run: python -m unittest discover -s tests -v
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          PYTHONPATH: src
+  distributions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: python -m pip install -r requirements-compatibility.txt
+      - run: python -m build --wheel --sdist
+      - run: python scripts/verify_distributions.py dist
+      - name: Verify installed public typing
+        run: |
+          python -m pip install dist/*.whl
+          python -m mypy --strict tests/typing/valid.py
+          ! python -m mypy --strict tests/typing/invalid.py
+      - run: python -m pip list
+  codex-transport-windows:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Run hermetic Codex tests
+        shell: pwsh
+        run: |
+          $env:PYTHONDONTWRITEBYTECODE = "1"
+          $env:PYTHONPATH = "src"
+          python -m unittest tests.test_codex_jsonl_transport tests.test_codex_jsonl_protocol tests.test_codex_jsonl tests.test_codex_jsonl_mapping tests.test_codex_provider tests.test_cli tests.test_provider_composition tests.test_runner_path -v

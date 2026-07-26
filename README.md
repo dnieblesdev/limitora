@@ -2,7 +2,9 @@
 
 Limitora is a typed Python library for provider-agnostic quota and status observations. It keeps provider adapters, composition, caching, output projection, and the CLI behind explicit boundaries so scripts and small tools can inspect status without embedding UI logic or leaking secrets.
 
-> **Current status**: version `0.1.0` ships the typed public API, deterministic output projections, a provider-aware `limitora status` CLI, Codex JSONL support, and opt-in OpenCode Go support.
+> **Current status**: the `0.1.0` source tree contains the typed public API, deterministic output projections, a provider-aware `limitora status` CLI, Codex JSONL support, and opt-in OpenCode Go support. No distribution has been published yet.
+
+Supported CPython versions are 3.10 through 3.14. A newer minor is not claimed until CI covers it; an upper bound requires a reproduced incompatibility.
 
 ## Install and typed quick path
 
@@ -60,8 +62,8 @@ Limitora never imports YASB, PyQt, Waybar, or any UI integration.
 
 | Provider | Status | Boundary |
 |----------|--------|----------|
-| Codex | shipped | Explicit Codex JSONL adapter; authorized source is opt-in. |
-| OpenCode Go | shipped, opt-in | Explicit dashboard adapter; authorization and endpoint behavior are qualified. |
+| Codex | implemented | Explicit Codex JSONL adapter; authorized source is opt-in. |
+| OpenCode Go | implemented, opt-in | Explicit dashboard adapter; authorization and endpoint behavior are qualified. |
 | Claude / Gemini | not shipped | No adapter or support promise. |
 
 ## Public API

@@ -40,6 +40,7 @@ from limitora import (
     activate_provider,
 )
 from limitora.providers import ProviderDetection, ProviderRequest
+from tests._native_runner import NATIVE_RUNNER
 
 
 NOW = datetime(2026, 7, 15, 12, tzinfo=timezone.utc)
@@ -172,7 +173,7 @@ print(json.dumps({name: name in sys.modules for name in names}, sort_keys=True))
 
     def test_consumers_construct_and_reuse_one_client_per_provider_from_root(self) -> None:
         configs: tuple[ProviderConfig, ...] = (
-            CodexJsonlConfig(("/declared/codex",)),
+            CodexJsonlConfig(NATIVE_RUNNER),
             OpenCodeGoConfig("workspace", "opaque-cookie"),
         )
 
