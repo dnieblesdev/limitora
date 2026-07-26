@@ -4,6 +4,8 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+env:
+  CANONICAL_SOURCE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
 jobs:
   source-tests:
     strategy:
@@ -15,6 +17,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANONICAL_SOURCE_SHA }}
+      - shell: bash
+        run: 'actual="$(git rev-parse HEAD)"; printf "canonical source SHA: %s\nchecked out SHA: %s\n" "$CANONICAL_SOURCE_SHA" "$actual"; test "$actual" = "$CANONICAL_SOURCE_SHA"'
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
@@ -36,6 +42,10 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANONICAL_SOURCE_SHA }}
+      - shell: bash
+        run: 'actual="$(git rev-parse HEAD)"; printf "canonical source SHA: %s\nchecked out SHA: %s\n" "$CANONICAL_SOURCE_SHA" "$actual"; test "$actual" = "$CANONICAL_SOURCE_SHA"'
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"
@@ -62,8 +72,8 @@ jobs:
       - name: Record and upload exact artifact bundle
         shell: bash
         run: >-
-          python -c 'from hashlib import sha256;from pathlib import Path;import subprocess;d=Path("dist");a=sorted((*d.glob("*.whl"),*d.glob("*.tar.gz")),key=lambda p:p.name);w=sorted((d/"wheelhouse").glob("*.whl"),key=lambda p:p.name);assert len(a)==2 and w and all(not p.name.startswith("limitora-") for p in w),"invalid artifact bundle";f=sorted((*a,*w),key=lambda p:p.relative_to(d).as_posix());(d/"manifest.sha256").write_text("".join(f"{sha256(p.read_bytes()).hexdigest()}  {p.relative_to(d).as_posix()}\n" for p in f),encoding="ascii");(d/"source-sha.txt").write_text(subprocess.check_output(["git","rev-parse","HEAD"],text=True),encoding="ascii")'
-      - uses: actions/upload-artifact@v4
+          python -c 'from hashlib import sha256;from pathlib import Path;import os;d=Path("dist");a=sorted((*d.glob("*.whl"),*d.glob("*.tar.gz")),key=lambda p:p.name);w=sorted((d/"wheelhouse").glob("*.whl"),key=lambda p:p.name);assert len(a)==2 and w and all(not p.name.startswith("limitora-") for p in w),"invalid artifact bundle";source=d/"source-sha.txt";source.write_text(os.environ["CANONICAL_SOURCE_SHA"]+"\n",encoding="ascii");f=sorted((*a,*w,source),key=lambda p:p.relative_to(d).as_posix());(d/"manifest.sha256").write_text("".join(f"{sha256(p.read_bytes()).hexdigest()}  {p.relative_to(d).as_posix()}\n" for p in f),encoding="ascii")'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: limitora-pr2-artifacts
           path: dist
@@ -75,6 +85,10 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANONICAL_SOURCE_SHA }}
+      - shell: bash
+        run: 'actual="$(git rev-parse HEAD)"; printf "canonical source SHA: %s\nchecked out SHA: %s\n" "$CANONICAL_SOURCE_SHA" "$actual"; test "$actual" = "$CANONICAL_SOURCE_SHA"'
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"
@@ -95,10 +109,14 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANONICAL_SOURCE_SHA }}
+      - shell: bash
+        run: 'actual="$(git rev-parse HEAD)"; printf "canonical source SHA: %s\nchecked out SHA: %s\n" "$CANONICAL_SOURCE_SHA" "$actual"; test "$actual" = "$CANONICAL_SOURCE_SHA"'
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: limitora-pr2-artifacts
           path: artifact
@@ -125,14 +143,14 @@ jobs:
               "$env_dir/bin/python" -m pip install --no-index --no-build-isolation --no-deps --find-links "$wheelhouse" "$artifact"
             fi
             cli="$env_dir/bin/limitora"
-            env -u PYTHONPATH -u PYTHONHOME PYTHONNOUSERSITE=1 "$env_dir/bin/python" -I "$bundle/smoke.py" --artifact "$artifact" --manifest "$bundle/manifest.sha256" --source-sha "$bundle/source-sha.txt" --expected-source-sha "$GITHUB_SHA" --expected-version 0.1.0 --checkout "$repo" --wheelhouse "$wheelhouse" --cli "$cli" --installation "$kind"
+            env -u PYTHONPATH -u PYTHONHOME PYTHONNOUSERSITE=1 "$env_dir/bin/python" -I "$bundle/smoke.py" --artifact "$artifact" --manifest "$bundle/manifest.sha256" --source-sha "$bundle/source-sha.txt" --expected-source-sha "$CANONICAL_SOURCE_SHA" --expected-version 0.1.0 --checkout "$repo" --wheelhouse "$wheelhouse" --cli "$cli" --installation "$kind"
             if [ "$kind" = sdist ]; then
               "$env_dir/bin/python" -m pip install --no-index --no-build-isolation --find-links "$wheelhouse" "${artifact}[opencode-go]"
             else
               "$env_dir/bin/python" -m pip install --no-index --find-links "$wheelhouse" "${artifact}[opencode-go]"
             fi
             "$env_dir/bin/python" -m pip check
-            env -u PYTHONPATH -u PYTHONHOME PYTHONNOUSERSITE=1 "$env_dir/bin/python" -I "$bundle/smoke.py" --artifact "$artifact" --manifest "$bundle/manifest.sha256" --source-sha "$bundle/source-sha.txt" --expected-source-sha "$GITHUB_SHA" --expected-version 0.1.0 --checkout "$repo" --wheelhouse "$wheelhouse" --cli "$cli" --installation "$kind" --require-opencode-dependency
+            env -u PYTHONPATH -u PYTHONHOME PYTHONNOUSERSITE=1 "$env_dir/bin/python" -I "$bundle/smoke.py" --artifact "$artifact" --manifest "$bundle/manifest.sha256" --source-sha "$bundle/source-sha.txt" --expected-source-sha "$CANONICAL_SOURCE_SHA" --expected-version 0.1.0 --checkout "$repo" --wheelhouse "$wheelhouse" --cli "$cli" --installation "$kind" --require-opencode-dependency
           }
           run_smoke wheel "$wheel"
           run_smoke sdist "$sdist"
@@ -166,14 +184,14 @@ jobs:
               & $python -m pip install --no-index --no-build-isolation --no-deps --find-links $wheelhouse $artifact
             }
             $cli = Join-Path $envDir "Scripts\limitora.exe"
-            & $python -I "$bundle\smoke.py" --artifact $artifact --manifest "$bundle\manifest.sha256" --source-sha "$bundle\source-sha.txt" --expected-source-sha $env:GITHUB_SHA --expected-version 0.1.0 --checkout $repo --wheelhouse $wheelhouse --cli $cli --installation $kind
+            & $python -I "$bundle\smoke.py" --artifact $artifact --manifest "$bundle\manifest.sha256" --source-sha "$bundle\source-sha.txt" --expected-source-sha $env:CANONICAL_SOURCE_SHA --expected-version 0.1.0 --checkout $repo --wheelhouse $wheelhouse --cli $cli --installation $kind
             if ($kind -eq "sdist") {
               & $python -m pip install --no-index --no-build-isolation --find-links $wheelhouse "${artifact}[opencode-go]"
             } else {
               & $python -m pip install --no-index --find-links $wheelhouse "${artifact}[opencode-go]"
             }
             & $python -m pip check
-            & $python -I "$bundle\smoke.py" --artifact $artifact --manifest "$bundle\manifest.sha256" --source-sha "$bundle\source-sha.txt" --expected-source-sha $env:GITHUB_SHA --expected-version 0.1.0 --checkout $repo --wheelhouse $wheelhouse --cli $cli --installation $kind --require-opencode-dependency
+            & $python -I "$bundle\smoke.py" --artifact $artifact --manifest "$bundle\manifest.sha256" --source-sha "$bundle\source-sha.txt" --expected-source-sha $env:CANONICAL_SOURCE_SHA --expected-version 0.1.0 --checkout $repo --wheelhouse $wheelhouse --cli $cli --installation $kind --require-opencode-dependency
           }
           Invoke-Smoke "wheel" $wheel
           Invoke-Smoke "sdist" $sdist
