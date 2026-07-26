@@ -4,6 +4,8 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+env:
+  CANONICAL_SOURCE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
 jobs:
   source-tests:
     strategy:
@@ -15,6 +17,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANONICAL_SOURCE_SHA }}
+      - shell: bash
+        run: 'actual="$(git rev-parse HEAD)"; printf "canonical source SHA: %s\nchecked out SHA: %s\n" "$CANONICAL_SOURCE_SHA" "$actual"; test "$actual" = "$CANONICAL_SOURCE_SHA"'
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
@@ -36,23 +42,53 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANONICAL_SOURCE_SHA }}
+      - shell: bash
+        run: 'actual="$(git rev-parse HEAD)"; printf "canonical source SHA: %s\nchecked out SHA: %s\n" "$CANONICAL_SOURCE_SHA" "$actual"; test "$actual" = "$CANONICAL_SOURCE_SHA"'
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"
       - run: python -m pip install -r requirements-compatibility.txt
       - run: python -m build --wheel --sdist
       - run: python scripts/verify_distributions.py dist
+      - run: python -m twine check --strict dist/*.whl dist/*.tar.gz
       - name: Verify installed public typing
         run: |
           python -m pip install dist/*.whl
           python -m mypy --strict tests/typing/valid.py
           ! python -m mypy --strict tests/typing/invalid.py
+      - name: Prepare offline smoke wheelhouse
+        shell: bash
+        run: |
+          mkdir -p dist/wheelhouse
+          for python_version in 3.10 3.11 3.12 3.13 3.14; do
+            for platform in manylinux_2_17_x86_64 win_amd64; do
+              python -m pip download --only-binary=:all: --dest dist/wheelhouse \
+                --platform "$platform" --python-version "$python_version" --implementation cp \
+                --abi "cp${python_version/./}" httpx==0.28.1 setuptools==83.0.0 exceptiongroup==1.3.1 typing_extensions==4.16.0
+            done
+          done
+      - name: Record and upload exact artifact bundle
+        shell: bash
+        run: >-
+          python -c 'from hashlib import sha256;from pathlib import Path;import os;d=Path("dist");a=sorted((*d.glob("*.whl"),*d.glob("*.tar.gz")),key=lambda p:p.name);w=sorted((d/"wheelhouse").glob("*.whl"),key=lambda p:p.name);assert len(a)==2 and w and all(not p.name.startswith("limitora-") for p in w),"invalid artifact bundle";source=d/"source-sha.txt";source.write_text(os.environ["CANONICAL_SOURCE_SHA"]+"\n",encoding="ascii");f=sorted((*a,*w,source),key=lambda p:p.relative_to(d).as_posix());(d/"manifest.sha256").write_text("".join(f"{sha256(p.read_bytes()).hexdigest()}  {p.relative_to(d).as_posix()}\n" for p in f),encoding="ascii")'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: limitora-pr2-artifacts
+          path: dist
+          if-no-files-found: error
+          retention-days: 14
       - run: python -m pip list
   codex-transport-windows:
     runs-on: windows-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANONICAL_SOURCE_SHA }}
+      - shell: bash
+        run: 'actual="$(git rev-parse HEAD)"; printf "canonical source SHA: %s\nchecked out SHA: %s\n" "$CANONICAL_SOURCE_SHA" "$actual"; test "$actual" = "$CANONICAL_SOURCE_SHA"'
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"
@@ -62,3 +98,101 @@ jobs:
           $env:PYTHONDONTWRITEBYTECODE = "1"
           $env:PYTHONPATH = "src"
           python -m unittest tests.test_codex_jsonl_transport tests.test_codex_jsonl_protocol tests.test_codex_jsonl tests.test_codex_jsonl_mapping tests.test_codex_provider tests.test_cli tests.test_provider_composition tests.test_runner_path -v
+  installed-smokes:
+    needs: distributions
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANONICAL_SOURCE_SHA }}
+      - shell: bash
+        run: 'actual="$(git rev-parse HEAD)"; printf "canonical source SHA: %s\nchecked out SHA: %s\n" "$CANONICAL_SOURCE_SHA" "$actual"; test "$actual" = "$CANONICAL_SOURCE_SHA"'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: limitora-pr2-artifacts
+          path: artifact
+      - name: Run isolated artifact smokes
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_WORKSPACE"
+          work="$(mktemp -d)"; bundle="$work/bundle"; mkdir "$bundle"; cp -a "$repo/artifact"/. "$bundle"/
+          shopt -s nullglob
+          wheels=("$bundle"/*.whl); sdists=("$bundle"/*.tar.gz)
+          (( ${#wheels[@]} == 1 && ${#sdists[@]} == 1 )) || { printf 'expected exactly one wheel and sdist\n' >&2; exit 1; }
+          wheel="${wheels[0]}"; sdist="${sdists[0]}"; wheelhouse="$bundle/wheelhouse"
+          cp "$repo/tests/installed_artifact_smoke.py" "$bundle/smoke.py"
+          cd "$work"
+          run_smoke() {
+            kind="$1"; artifact="$2"; env_dir="$work/$kind"
+            python -m venv "$env_dir"
+            if [ "$kind" = wheel ]; then
+              "$env_dir/bin/python" -m pip install --no-index --no-deps --find-links "$wheelhouse" "$artifact"
+            else
+              "$env_dir/bin/python" -m pip install --no-index --find-links "$wheelhouse" setuptools==83.0.0
+              "$env_dir/bin/python" -m pip install --no-index --no-build-isolation --no-deps --find-links "$wheelhouse" "$artifact"
+            fi
+            cli="$env_dir/bin/limitora"
+            env -u PYTHONPATH -u PYTHONHOME PYTHONNOUSERSITE=1 "$env_dir/bin/python" -I "$bundle/smoke.py" --artifact "$artifact" --manifest "$bundle/manifest.sha256" --source-sha "$bundle/source-sha.txt" --expected-source-sha "$CANONICAL_SOURCE_SHA" --expected-version 0.1.0 --checkout "$repo" --wheelhouse "$wheelhouse" --cli "$cli" --installation "$kind"
+            if [ "$kind" = sdist ]; then
+              "$env_dir/bin/python" -m pip install --no-index --no-build-isolation --find-links "$wheelhouse" "${artifact}[opencode-go]"
+            else
+              "$env_dir/bin/python" -m pip install --no-index --find-links "$wheelhouse" "${artifact}[opencode-go]"
+            fi
+            "$env_dir/bin/python" -m pip check
+            env -u PYTHONPATH -u PYTHONHOME PYTHONNOUSERSITE=1 "$env_dir/bin/python" -I "$bundle/smoke.py" --artifact "$artifact" --manifest "$bundle/manifest.sha256" --source-sha "$bundle/source-sha.txt" --expected-source-sha "$CANONICAL_SOURCE_SHA" --expected-version 0.1.0 --checkout "$repo" --wheelhouse "$wheelhouse" --cli "$cli" --installation "$kind" --require-opencode-dependency
+          }
+          run_smoke wheel "$wheel"
+          run_smoke sdist "$sdist"
+      - name: Run isolated artifact smokes
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $repo = $env:GITHUB_WORKSPACE
+          $work = Join-Path $env:RUNNER_TEMP ([guid]::NewGuid().ToString())
+          $bundle = Join-Path $work "bundle"; New-Item -ItemType Directory -Path $bundle | Out-Null; Copy-Item "$repo\artifact\*" $bundle -Recurse
+          $wheels = @(Get-ChildItem -File "$bundle\*.whl")
+          $sdists = @(Get-ChildItem -File "$bundle\*.tar.gz")
+          if ($wheels.Count -ne 1 -or $sdists.Count -ne 1) { throw "expected exactly one wheel and sdist" }
+          $wheel = $wheels[0].FullName; $sdist = $sdists[0].FullName
+          Copy-Item "$repo\tests\installed_artifact_smoke.py" "$bundle\smoke.py"
+          $wheelhouse = Join-Path $bundle "wheelhouse"
+          $env:PYTHONNOUSERSITE = "1"
+          Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue
+          Remove-Item Env:PYTHONHOME -ErrorAction SilentlyContinue
+          Push-Location $work
+          function Invoke-Smoke($kind, $artifact) {
+            $envDir = Join-Path $work $kind
+            python -m venv $envDir
+            $python = Join-Path $envDir "Scripts\python.exe"
+            if ($kind -eq "wheel") {
+              & $python -m pip install --no-index --no-deps --find-links $wheelhouse $artifact
+            } else {
+              & $python -m pip install --no-index --find-links $wheelhouse setuptools==83.0.0
+              & $python -m pip install --no-index --no-build-isolation --no-deps --find-links $wheelhouse $artifact
+            }
+            $cli = Join-Path $envDir "Scripts\limitora.exe"
+            & $python -I "$bundle\smoke.py" --artifact $artifact --manifest "$bundle\manifest.sha256" --source-sha "$bundle\source-sha.txt" --expected-source-sha $env:CANONICAL_SOURCE_SHA --expected-version 0.1.0 --checkout $repo --wheelhouse $wheelhouse --cli $cli --installation $kind
+            if ($kind -eq "sdist") {
+              & $python -m pip install --no-index --no-build-isolation --find-links $wheelhouse "${artifact}[opencode-go]"
+            } else {
+              & $python -m pip install --no-index --find-links $wheelhouse "${artifact}[opencode-go]"
+            }
+            & $python -m pip check
+            & $python -I "$bundle\smoke.py" --artifact $artifact --manifest "$bundle\manifest.sha256" --source-sha "$bundle\source-sha.txt" --expected-source-sha $env:CANONICAL_SOURCE_SHA --expected-version 0.1.0 --checkout $repo --wheelhouse $wheelhouse --cli $cli --installation $kind --require-opencode-dependency
+          }
+          Invoke-Smoke "wheel" $wheel
+          Invoke-Smoke "sdist" $sdist
+          Pop-Location
