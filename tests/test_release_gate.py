@@ -5,6 +5,10 @@ LEDGER = ROOT / "release/ledger.json"
 DOSSIER = ROOT / "release/0.1.0.md"
 WORKFLOW = ROOT / ".github/workflows/protected-release.yml"
 APPROVED_WORKFLOW_SHA256 = "71cced37d53a0f73a6ba8d659aa6cc3a87473da29b494281fab034e1df0599a8"
+
+def workflow_sha256(data):
+    return hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest()
+
 class ReleaseGateTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -35,7 +39,11 @@ class ReleaseGateTests(unittest.TestCase):
         self.assertIn("not published to PyPI", self.doc)
         self.assertIn("GitHub Release does not yet exist", self.doc)
     def test_protected_workflow_matches_approved_base_bytes(self):
-        self.assertEqual(hashlib.sha256(WORKFLOW.read_bytes()).hexdigest(), APPROVED_WORKFLOW_SHA256)
+        lf = WORKFLOW.read_bytes().replace(b"\r\n", b"\n")
+        for candidate in (lf, lf.replace(b"\n", b"\r\n")):
+            self.assertEqual(workflow_sha256(candidate), APPROVED_WORKFLOW_SHA256)
+        for mutation in (lf.replace(b"\n", b"\r"), lf.replace(b"name: Protected release", b"name: Protected release!", 1)):
+            self.assertNotEqual(workflow_sha256(mutation), APPROVED_WORKFLOW_SHA256)
 
 if __name__ == "__main__":
     unittest.main()
