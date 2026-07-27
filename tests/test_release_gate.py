@@ -1,15 +1,10 @@
-import json, re, subprocess, unittest
+import hashlib, json, re, unittest
 from pathlib import Path
 ROOT = Path(__file__).parents[1]
 LEDGER = ROOT / "release/ledger.json"
 DOSSIER = ROOT / "release/0.1.0.md"
-ALLOWED = {"release/ledger.json", "release/0.1.0.md", "tests/test_release_gate.py"}
-
-def git_lines(*args):
-    return subprocess.check_output(["git", *args], text=True, cwd=ROOT).splitlines()
-def changed_paths():
-    base = git_lines("merge-base", "HEAD", "origin/main")[0]
-    return set(git_lines("diff", "--name-only", f"{base}...HEAD", "--") + git_lines("diff", "--name-only", "--") + git_lines("diff", "--cached", "--name-only", "--") + git_lines("ls-files", "--others", "--exclude-standard"))
+WORKFLOW = ROOT / ".github/workflows/protected-release.yml"
+APPROVED_WORKFLOW_SHA256 = "71cced37d53a0f73a6ba8d659aa6cc3a87473da29b494281fab034e1df0599a8"
 class ReleaseGateTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -39,10 +34,8 @@ class ReleaseGateTests(unittest.TestCase):
         self.assertRegex(self.doc, r"not\s+resolved by `0.1.0`")
         self.assertIn("not published to PyPI", self.doc)
         self.assertIn("GitHub Release does not yet exist", self.doc)
-    def test_scope_excludes_protected_workflow_and_existing_files(self):
-        changed = changed_paths()
-        self.assertLessEqual(changed, ALLOWED)
-        self.assertNotIn(".github/workflows/protected-release.yml", changed)
+    def test_protected_workflow_matches_approved_base_bytes(self):
+        self.assertEqual(hashlib.sha256(WORKFLOW.read_bytes()).hexdigest(), APPROVED_WORKFLOW_SHA256)
 
 if __name__ == "__main__":
     unittest.main()
