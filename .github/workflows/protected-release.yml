@@ -229,30 +229,43 @@ jobs:
               assert (ledger.get("schema_version"), ledger.get("version"), ledger.get("source_sha")) == (1, sys.argv[2], sys.argv[1])
           else: assert not (root / "release-ledger.json").exists() and not receipt["ledger_sha256"] and not receipt["ledger_main_sha"]
           PY
-          python -m pip install --disable-pip-version-check --no-index --find-links bundle/wheelhouse packaging==26.0
-          mkdir -p dist
-          cp bundle/*.whl bundle/*.tar.gz dist/
-          python scripts/verify_distributions.py dist
           python - <<'PY'
-          import json, os, subprocess, sys, tempfile
+          import json, os, shutil, subprocess, sys, tempfile
           from pathlib import Path
-          repo = Path(os.environ["GITHUB_WORKSPACE"]); bundle = repo / "bundle"
-          wheel = next(bundle.glob("*.whl")); sdist = next(bundle.glob("*.tar.gz"))
+          repo = Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+          downloaded_bundle = (repo / "bundle").resolve()
+          runner_temp = Path(os.environ["RUNNER_TEMP"]).resolve()
+          stage = Path(tempfile.mkdtemp(prefix="limitora-", dir=runner_temp)).resolve()
+          assert runner_temp in (stage, *stage.parents)
+          assert repo not in (stage, *stage.parents) and stage not in (repo, *repo.parents)
+          bundle = stage / "bundle"
+          shutil.copytree(downloaded_bundle, bundle)
+          source_files = {path.relative_to(downloaded_bundle).as_posix(): path for path in downloaded_bundle.rglob("*") if path.is_file()}
+          staged_files = {path.relative_to(bundle).as_posix(): path for path in bundle.rglob("*") if path.is_file()}
+          assert source_files.keys() == staged_files.keys()
+          assert all(source_files[name].read_bytes() == staged_files[name].read_bytes() for name in source_files)
+          shutil.copy2(repo / "tests/installed_artifact_smoke.py", bundle / "smoke.py")
+          wheel = next(bundle.glob("*.whl")); sdist = next(bundle.glob("*.tar.gz")); wheelhouse = (bundle / "wheelhouse").resolve()
+          env = os.environ.copy(); env.pop("PYTHONPATH", None); env.pop("PYTHONHOME", None); env["PYTHONNOUSERSITE"] = "1"
+          subprocess.run([sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "--no-index", "--find-links", str(wheelhouse), "packaging==26.0"], check=True, env=env)
+          if os.environ["RUNNER_OS"] == "Linux":
+              dist = repo / "dist"; dist.mkdir(exist_ok=True)
+              for artifact in (wheel, sdist): shutil.copy2(downloaded_bundle / artifact.name, dist / artifact.name)
+              subprocess.run([sys.executable, "scripts/verify_distributions.py", "dist"], check=True, cwd=repo, env=env)
           for kind, artifact in (("wheel", wheel), ("sdist", sdist)):
-              work = Path(tempfile.mkdtemp()); env = os.environ.copy()
-              env.pop("PYTHONPATH", None); env.pop("PYTHONHOME", None); env["PYTHONNOUSERSITE"] = "1"
-              venv = work / "venv"; subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True)
-              python = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python"); cli = venv / ("Scripts/limitora.exe" if os.name == "nt" else "bin/limitora")
-              if kind == "sdist": subprocess.run([str(python), "-m", "pip", "install", "--no-index", "--find-links", str(bundle / "wheelhouse"), "setuptools==83.0.0"], check=True)
-              args = [str(python), "-m", "pip", "install", "--no-index", "--find-links", str(bundle / "wheelhouse")]
+              env_dir = stage / kind / "venv"; env_dir.parent.mkdir()
+              subprocess.run([sys.executable, "-m", "venv", str(env_dir)], check=True, env=env)
+              python = env_dir / ("Scripts/python.exe" if os.name == "nt" else "bin/python"); cli = env_dir / ("Scripts/limitora.exe" if os.name == "nt" else "bin/limitora")
+              if kind == "sdist": subprocess.run([str(python), "-m", "pip", "install", "--no-index", "--find-links", str(wheelhouse), "setuptools==83.0.0"], check=True, env=env)
+              args = [str(python), "-m", "pip", "install", "--no-index", "--find-links", str(wheelhouse)]
               if kind == "wheel": args.append("--no-deps")
               else: args += ["--no-build-isolation", "--no-deps"]
-              subprocess.run([*args, str(artifact)], check=True)
-              smoke = [str(python), "-I", str(repo / "tests/installed_artifact_smoke.py"), "--artifact", str(artifact), "--manifest", str(bundle / "manifest.sha256"), "--source-sha", str(bundle / "source-sha.txt"), "--expected-source-sha", os.environ["SOURCE_SHA"], "--expected-version", os.environ["VERSION"], "--checkout", str(repo), "--wheelhouse", str(bundle / "wheelhouse"), "--cli", str(cli), "--installation", kind]
-              subprocess.run(smoke, check=True, cwd=work, env=env)
-              subprocess.run([str(python), "-m", "pip", "install", "--no-index", "--find-links", str(bundle / "wheelhouse"), f"{artifact}[opencode-go]"], check=True)
-              subprocess.run([str(python), "-m", "pip", "check"], check=True)
-              subprocess.run([*smoke, "--require-opencode-dependency"], check=True, cwd=work, env=env)
+              subprocess.run([*args, str(artifact)], check=True, env=env)
+              smoke = [str(python), "-I", str(bundle / "smoke.py"), "--artifact", str(artifact), "--manifest", str(bundle / "manifest.sha256"), "--source-sha", str(bundle / "source-sha.txt"), "--expected-source-sha", os.environ["SOURCE_SHA"], "--expected-version", os.environ["VERSION"], "--checkout", str(repo), "--wheelhouse", str(wheelhouse), "--cli", str(cli), "--installation", kind]
+              subprocess.run(smoke, check=True, cwd=stage, env=env)
+              subprocess.run([str(python), "-m", "pip", "install", "--no-index", "--find-links", str(wheelhouse), f"{artifact}[opencode-go]"], check=True, env=env)
+              subprocess.run([str(python), "-m", "pip", "check"], check=True, cwd=stage, env=env)
+              subprocess.run([*smoke, "--require-opencode-dependency"], check=True, cwd=stage, env=env)
           build = json.loads((bundle / "build-receipt.json").read_text(encoding="ascii"))
           receipt = {"artifact_id": os.environ["ARTIFACT_ID"], "artifact_digest": os.environ["ARTIFACT_DIGEST"], "source_sha": os.environ["SOURCE_SHA"], "version": os.environ["VERSION"], "wheel_sha256": build["wheel_sha256"], "sdist_sha256": build["sdist_sha256"], "matrix": {"os": os.environ["MATRIX_OS"], "python": os.environ["MATRIX_PYTHON"]}, "result": "pass"}
           Path(os.environ["GITHUB_STEP_SUMMARY"]).write_text(json.dumps(receipt, sort_keys=True) + "\n", encoding="ascii")

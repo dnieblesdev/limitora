@@ -1,11 +1,15 @@
 from pathlib import Path
+import hashlib
 import re
 import unittest
 WORKFLOW = Path(__file__).parents[1] / ".github/workflows/protected-release.yml"
+COMPATIBILITY = WORKFLOW.with_name("python-compatibility.yml")
+SMOKE = Path(__file__).parents[1] / "tests/installed_artifact_smoke.py"
 PYPROJECT = Path(__file__).parents[1] / "pyproject.toml"
 SHA = re.compile(r"^[0-9a-f]{40}$")
 BUILD_WHEELHOUSE_PACKAGES = "httpx==0.28.1 setuptools==83.0.0 exceptiongroup==1.3.1 typing_extensions==4.16.0 packaging==26.0"
-OFFLINE_PACKAGING_INSTALL = "python -m pip install --disable-pip-version-check --no-index --find-links bundle/wheelhouse packaging==26.0"
+OFFLINE_PACKAGING_INSTALL = '[sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "--no-index", "--find-links", str(wheelhouse), "packaging==26.0"]'
+SMOKE_SHA256 = "80fa2f6f1c2aed167727cdf00b2bfb0125914f56efc600bce7ef90561d66898e"
 
 
 def job_sections(text):
@@ -20,6 +24,8 @@ def accepts_artifact(receipt, artifact_id, digest, manifest, wheel, sdist):
 def normalize_digest(raw):
     value = raw.removeprefix("sha256:")
     return f"sha256:{value}" if re.fullmatch(r"[0-9a-f]{64}", value) else None
+def canonical_smoke_source_sha256(source):
+    return hashlib.sha256(source.replace(b"\r\n", b"\n")).hexdigest()
 class ProtectedReleaseContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -56,6 +62,102 @@ class ProtectedReleaseContractTests(unittest.TestCase):
         )
         self.assertEqual(self.text.count(download_block), 2)
         self.assertGreaterEqual(self.text.count("actions/artifacts/$ARTIFACT_ID"), 2)
+
+    def test_validate_preserves_receipt_hash_and_wheelhouse_checks_on_windows(self):
+        validate = self.jobs["validate"]
+        audit = validate[validate.index("python - \"$SOURCE_SHA\""):validate.index("for kind, artifact")]
+        self.assertIn("actions/artifacts/$ARTIFACT_ID", validate)
+        for part in ("build-receipt.json", "manifest.sha256", "archive-inventory.txt", "wheel_sha256", "sdist_sha256", "source-sha.txt", "wheelhouse"):
+            self.assertIn(part, audit)
+        self.assertNotRegex(audit, r"if .*RUNNER_OS.*Linux.*\n(?:.*\n)*?python - \"\$SOURCE_SHA\"")
+
+    def _assert_staging_contract(self, text):
+        validate = job_sections(text)["validate"]
+        for part in (
+            'if os.environ["RUNNER_OS"] == "Linux":',
+            'Path(os.environ["GITHUB_WORKSPACE"]).resolve()',
+            'Path(os.environ["RUNNER_TEMP"]).resolve()',
+            'tempfile.mkdtemp(prefix="limitora-", dir=runner_temp)',
+            'assert runner_temp in (stage, *stage.parents)',
+            'assert repo not in (stage, *stage.parents) and stage not in (repo, *repo.parents)',
+            'shutil.copytree(downloaded_bundle, bundle)',
+            'source_files.keys() == staged_files.keys()',
+            'source_files[name].read_bytes() == staged_files[name].read_bytes()',
+            'shutil.copy2(repo / "tests/installed_artifact_smoke.py", bundle / "smoke.py")',
+            'env_dir = stage / kind / "venv"',
+            'str(wheelhouse)',
+            'str(artifact)',
+            'str(bundle / "manifest.sha256")',
+            'str(bundle / "source-sha.txt")',
+            'str(bundle / "smoke.py")',
+            '"--checkout", str(repo)',
+            '"--wheelhouse", str(wheelhouse)',
+            '"-I"',
+            'cwd=stage',
+            'env.pop("PYTHONPATH", None)',
+            'env.pop("PYTHONHOME", None)',
+            'env["PYTHONNOUSERSITE"] = "1"',
+        ):
+            self.assertIn(part, validate)
+        stage_start = validate.index('stage = Path(tempfile.mkdtemp')
+        venv_start = validate.index('env_dir = stage / kind / "venv"')
+        self.assertLess(stage_start, venv_start)
+        self.assertLess(validate.index("shutil.copytree(downloaded_bundle, bundle)"), venv_start)
+        self.assertLess(validate.index('shutil.copy2(repo / "tests/installed_artifact_smoke.py", bundle / "smoke.py")'), venv_start)
+        self.assertNotIn('repo / "tests/installed_artifact_smoke.py"), "--artifact"', validate)
+        self.assertNotIn('str(repo / "tests/installed_artifact_smoke.py")', validate)
+        self.assertNotIn('str(downloaded_bundle / artifact.name)', validate)
+        self.assertNotIn('"--wheelhouse", str(repo)', validate)
+        self.assertNotIn('"--manifest", str(repo)', validate)
+        self.assertNotIn('"--source-sha", str(repo)', validate)
+        self.assertLess(validate.index('if os.environ["RUNNER_OS"] == "Linux":'), validate.index('subprocess.run([sys.executable, "scripts/verify_distributions.py", "dist"]'))
+
+    def test_installed_smokes_follow_compatibility_staging_contract(self):
+        compatibility = COMPATIBILITY.read_text(encoding="ascii")
+        self._assert_staging_contract(self.text)
+        for part in ('RUNNER_TEMP', 'cp -a "$repo/artifact"', 'smoke.py', ' -I ', 'PYTHONNOUSERSITE=1'):
+            self.assertIn(part, compatibility)
+
+    def test_staging_contract_is_mutation_sensitive(self):
+        mutations = (
+            ("distribution audit unconditional", self.text.replace('if os.environ["RUNNER_OS"] == "Linux":\n', "", 1)),
+            ("stage under workspace", self.text.replace('tempfile.mkdtemp(prefix="limitora-", dir=runner_temp)', 'tempfile.mkdtemp(prefix="limitora-", dir=repo)', 1)),
+            ("install original bundle", self.text.replace('str(artifact)]', 'str(downloaded_bundle / artifact.name)]', 1)),
+            ("smoke original artifact", self.text.replace('"--artifact", str(artifact)', '"--artifact", str(downloaded_bundle / artifact.name)', 1)),
+            ("checkout as wheelhouse", self.text.replace('"--wheelhouse", str(wheelhouse)', '"--wheelhouse", str(repo)', 1)),
+            ("isolated interpreter flag removed", self.text.replace('smoke = [str(python), "-I",', 'smoke = [str(python),', 1)),
+            ("smoke copy omitted", self.text.replace('shutil.copy2(repo / "tests/installed_artifact_smoke.py", bundle / "smoke.py")\n', "", 1)),
+        )
+        for name, mutated in mutations:
+            with self.subTest(name=name), self.assertRaises(AssertionError):
+                self._assert_staging_contract(mutated)
+
+    def test_direct_url_smoke_source_is_unchanged_and_fail_closed(self):
+        source = SMOKE.read_bytes()
+        self.assertEqual(canonical_smoke_source_sha256(source), SMOKE_SHA256)
+        text = source.decode("ascii")
+        for part in (
+            'direct_url = distribution.read_text("direct_url.json")',
+            'check(not json.loads(direct_url).get("dir_info", {}).get("editable"), "editable installation metadata found")',
+            'check(str(checkout).casefold() not in direct_url.casefold(), "direct URL contains checkout path")',
+        ):
+            self.assertIn(part, text)
+
+    def test_smoke_source_integrity_accepts_lf_and_crlf_only(self):
+        lf = SMOKE.read_bytes().replace(b"\r\n", b"\n")
+        crlf = lf.replace(b"\n", b"\r\n")
+        self.assertNotEqual(lf, crlf)
+        self.assertEqual(canonical_smoke_source_sha256(lf), SMOKE_SHA256)
+        self.assertEqual(canonical_smoke_source_sha256(crlf), SMOKE_SHA256)
+        self.assertEqual(canonical_smoke_source_sha256(b"line\rline"), hashlib.sha256(b"line\rline").hexdigest())
+
+    def test_direct_url_contract_is_mutation_sensitive(self):
+        source = SMOKE.read_text(encoding="ascii")
+        for mutation in (
+            source.replace('check(str(checkout).casefold() not in direct_url.casefold(), "direct URL contains checkout path")', "", 1),
+            source.replace('not in direct_url.casefold()', 'in direct_url.casefold()', 1),
+        ):
+            self.assertNotEqual(canonical_smoke_source_sha256(mutation.encode("ascii")), SMOKE_SHA256)
     def test_matrix_is_complete_and_publish_requires_success(self):
         validate = self.jobs["validate"]
         self.assertIn("os: [ubuntu-latest, windows-latest]", validate)
@@ -73,12 +175,11 @@ class ProtectedReleaseContractTests(unittest.TestCase):
         self.assertEqual(validate.count(OFFLINE_PACKAGING_INSTALL), 1)
         receipt_end = validate.index("\n          PY\n", validate.index("python - \"$SOURCE_SHA\""))
         offline_install = validate.index(OFFLINE_PACKAGING_INSTALL)
-        distribution_verification = validate.index("python scripts/verify_distributions.py dist")
+        distribution_verification = validate.index('subprocess.run([sys.executable, "scripts/verify_distributions.py", "dist"]')
         self.assertLess(receipt_end, offline_install)
         self.assertLess(offline_install, distribution_verification)
-        install_lines = re.findall(r"(?m)^\s*(?:python -m )?pip install[^\n]*", validate + publish)
-        packaging_lines = [line.strip() for line in install_lines if re.search(r"\bpackaging(?:[<>=!~]|\s|$)", line)]
-        self.assertEqual(packaging_lines, [OFFLINE_PACKAGING_INSTALL])
+        self.assertIn('"--find-links", str(wheelhouse)', validate)
+        self.assertNotIn("--find-links bundle/wheelhouse", validate)
         self.assertNotIn("python -m pip install -r requirements-compatibility.txt", validate)
 
     def test_packaging_is_built_and_installed_only_for_orchestration(self):
@@ -89,8 +190,8 @@ class ProtectedReleaseContractTests(unittest.TestCase):
             ("build pin removed", self.text.replace(" packaging==26.0", "", 1)),
             ("offline install removed", self.text.replace(OFFLINE_PACKAGING_INSTALL, "", 1)),
             ("pin loosened", self.text.replace("packaging==26.0", "packaging>=26.0", 1)),
-            ("no-index removed", self.text.replace(OFFLINE_PACKAGING_INSTALL, OFFLINE_PACKAGING_INSTALL.replace(" --no-index", ""), 1)),
-            ("find-links source changed", self.text.replace(OFFLINE_PACKAGING_INSTALL, OFFLINE_PACKAGING_INSTALL.replace("bundle/wheelhouse", "bundle"), 1)),
+            ("no-index removed", self.text.replace(OFFLINE_PACKAGING_INSTALL, OFFLINE_PACKAGING_INSTALL.replace(', "--no-index"', ""), 1)),
+            ("find-links source changed", self.text.replace(OFFLINE_PACKAGING_INSTALL, OFFLINE_PACKAGING_INSTALL.replace("str(wheelhouse)", "str(bundle)"), 1)),
         )
         for name, mutated in mutations:
             with self.subTest(name=name), self.assertRaises(AssertionError):
