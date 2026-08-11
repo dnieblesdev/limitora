@@ -9,7 +9,7 @@ PYPROJECT = Path(__file__).parents[1] / "pyproject.toml"
 SHA = re.compile(r"^[0-9a-f]{40}$")
 BUILD_WHEELHOUSE_PACKAGES = "httpx==0.28.1 setuptools==83.0.0 exceptiongroup==1.3.1 typing_extensions==4.16.0 packaging==26.0"
 OFFLINE_PACKAGING_INSTALL = '[sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "--no-index", "--find-links", str(wheelhouse), "packaging==26.0"]'
-SMOKE_SHA256 = "b52c0b22ff9a62e6d6db12adc7aa8831bfe72c2ecdf1197b7cb79bd03187c4d6"
+SMOKE_SHA256 = "4bbe27bd6181cf0db6fd9731349672d0f6379f1814c0af0875b7b505ee4faa70"
 
 
 def job_sections(text):

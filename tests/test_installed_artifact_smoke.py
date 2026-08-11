@@ -8,7 +8,15 @@ from tests.installed_artifact_smoke import (
     LiveOutcomeKind,
     LivePreflightKind,
     classify_live_outcome,
+    cleanup_sitecustomize,
+    install_sitecustomize,
     preflight_live_codex,
+    redacted,
+    route_config,
+    sitecustomize_collision,
+    sitecustomize_path,
+    ROUTE_PORT_ENV,
+    ROUTE_SCENARIO_ENV,
 )
 
 
@@ -74,6 +82,45 @@ class LiveOutcomeTests(unittest.TestCase):
         self.assertEqual(LiveOutcomeKind.EXIT, exit_failure.kind)
         self.assertEqual(0, success.exit_code)
         self.assertNotIn("secret", repr(success))
+
+
+class InstalledRouteHelperTests(unittest.TestCase):
+    def test_route_config_rejects_invalid_port_or_scenario(self):
+        valid = {ROUTE_PORT_ENV: "12345", ROUTE_SCENARIO_ENV: "valid"}
+        self.assertEqual((12345, "valid"), route_config(valid))
+        for invalid in (
+            {ROUTE_PORT_ENV: "0", ROUTE_SCENARIO_ENV: "valid"},
+            {ROUTE_PORT_ENV: "65536", ROUTE_SCENARIO_ENV: "valid"},
+            {ROUTE_PORT_ENV: "port", ROUTE_SCENARIO_ENV: "valid"},
+            {ROUTE_PORT_ENV: "12345", ROUTE_SCENARIO_ENV: "unknown"},
+        ):
+            with self.subTest(invalid=invalid), self.assertRaises(AssertionError):
+                route_config(invalid)
+
+    def test_sitecustomize_collision_fails_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = sitecustomize_path(Path(directory))
+            path.write_text("unrelated", encoding="ascii")
+            self.assertTrue(sitecustomize_collision(path))
+            with patch("tests.installed_artifact_smoke.importlib.util.find_spec", return_value=type("Spec", (), {"origin": "/other/sitecustomize.py"})()):
+                self.assertTrue(sitecustomize_collision(path.with_name("other.py")))
+
+    def test_owned_sitecustomize_is_created_and_exact_cleanup_only(self):
+        with tempfile.TemporaryDirectory() as directory, patch("tests.installed_artifact_smoke.importlib.util.find_spec", return_value=None):
+            path, owned = install_sitecustomize(Path(directory))
+            self.assertEqual(owned, path.read_text(encoding="ascii"))
+            cleanup_sitecustomize(path, owned)
+            self.assertFalse(path.exists())
+            path, owned = install_sitecustomize(Path(directory))
+            path.write_text("changed", encoding="ascii")
+            cleanup_sitecustomize(path, owned)
+            self.assertEqual("changed", path.read_text(encoding="ascii"))
+
+    def test_redaction_helper_rejects_all_sensitive_markers(self):
+        self.assertTrue(redacted("scenario=valid requests=1 contract=true"))
+        for marker in ("workspace/raw-path-marker", "cookie/raw-header-marker", "raw-payload-marker", "proxy/raw-proxy-marker"):
+            with self.subTest(marker=marker):
+                self.assertFalse(redacted("unsafe " + marker))
 
 
 if __name__ == "__main__":

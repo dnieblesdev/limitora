@@ -71,9 +71,14 @@ operation while it is blocked inside HTTPX.
 
 The repository tests verify mapping, partial-data behavior, authorization policy,
 redirect handling, body/time bounds, optional-dependency scope, and secret
-non-disclosure. They do not establish live service availability or a permanent
-upstream protocol. Any future protocol change requires fresh public evidence,
-updated tests, and a separately approved documentation or implementation scope.
+non-disclosure. The installed-artifact WU3 smoke additionally crosses a real
+`127.0.0.1` socket from the installed console child and exercises valid,
+partial, malformed, status, redirect, timeout, connection, and body-limit
+scenarios. Its temporary child-only HTTPX shim is absent from distributions;
+the production origin remains exactly `https://opencode.ai`. These tests do not
+establish live service availability or a permanent upstream protocol. Any
+future protocol change requires fresh public evidence, updated tests, and a
+separately approved documentation or implementation scope.
 
 ## Related documents
 

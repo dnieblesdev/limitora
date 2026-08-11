@@ -180,6 +180,18 @@ fails safely. When enabled, discovery is only `shutil.which("codex")`, and the
 candidate must be a host-native absolute regular executable. Production code
 does not discover Codex binaries and no workflow enables this path.
 
+When the optional OpenCode Go extra is installed, the harness invokes the
+installed `limitora` console child with environment-backed synthetic workspace
+and cookie values. A temporary `sitecustomize.py` is created only in that
+isolated environment and only when no collision is present. It replaces the
+child's public `httpx.Client` with a public `BaseTransport` route that accepts
+only the exact `https://opencode.ai` GET, preserves Host/Cookie and no body,
+and rewrites a transport copy to an ephemeral IPv4 loopback server. The server
+has bounded shutdown, disabled request logging, proxy-poison environment
+coverage, and structural scenario receipts only. The shim is removed only when
+its bytes still exactly match the content it created; it is never distributed
+or used by normal installs.
+
 At the private Codex spawn boundary, the child receives a copied environment
 with `LIMITORA_OPENCODE_WORKSPACE_ID` and `LIMITORA_OPENCODE_AUTH_COOKIE`
 removed case-insensitively. Unrelated variables and process I/O semantics are
@@ -232,6 +244,9 @@ WU1 established the dedicated OpenCode environment-backed input boundary.
 WU2 adds the Codex child-environment least-privilege contract and the
 installed-artifact fake-child E2E plus harness-only live preflight described
 above. The existing CLI grammar and provider discovery rules remain unchanged.
+WU3 adds the installed OpenCode Go loopback protocol matrix and public HTTPX
+transport boundary described above. It provides no live OpenCode availability
+or upstream-schema evidence.
 
 ## Non-goals
 

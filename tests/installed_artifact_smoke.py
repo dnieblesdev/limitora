@@ -2,19 +2,101 @@
 
 from __future__ import annotations
 
-import argparse, hashlib, importlib.util, json, os, platform, shutil, site, socket, subprocess, sys, sysconfig, tempfile, time
+import argparse, hashlib, importlib.util, json, os, platform, shutil, site, socket, subprocess, sys, sysconfig, tempfile, threading, time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 import importlib.metadata as metadata
 from pathlib import Path
 from typing import Callable, Mapping
+from urllib.parse import quote
 
 from limitora._runner_path import _is_native_absolute_runner_path
 
 
 HELP = "limitora status [--help] [--json] [--provider {codex,opencode-go}] [flags]\n  codex:        --runner PATH [--runner ARG ...]\n                A single absolute PATH uses 'app-server --stdio'.\n                [--codex-allow-authorized-source]\n  opencode-go:  --workspace-id ID --auth-cookie COOKIE\n                [--endpoint URL] [--timeout SECONDS]\n                [--opencode-allow-authorized-source]\n                or LIMITORA_OPENCODE_WORKSPACE_ID /\n                LIMITORA_OPENCODE_AUTH_COOKIE\nWithout --provider, status prints 'no provider configured' to stderr (exit 4).\n"
 LIVE_ENV = "LIMITORA_CODEX_LIVE"
+ROUTE_PORT_ENV = "LIMITORA_TEST_HTTPX_ROUTE_PORT"
+ROUTE_SCENARIO_ENV = "LIMITORA_TEST_HTTPX_SCENARIO"
+ROUTE_SCENARIOS = ("valid", "partial", "json", "html", "401", "403", "429", "5xx", "redirect", "timeout", "connection", "declared", "streamed")
+_SECRETS = ("workspace/raw-path-marker", "cookie/raw-header-marker", "raw-payload-marker", "proxy/raw-proxy-marker")
+
+
+def route_config(environ: Mapping[str, str]) -> tuple[int, str]:
+    port, scenario = environ.get(ROUTE_PORT_ENV), environ.get(ROUTE_SCENARIO_ENV)
+    check(port is not None and port.isdigit() and 1 <= int(port) <= 65535, "invalid test route port")
+    check(scenario in ROUTE_SCENARIOS, "invalid test route scenario")
+    return int(port), scenario
+
+
+def sitecustomize_path(site_packages: Path) -> Path:
+    return site_packages / "sitecustomize.py"
+
+
+def sitecustomize_collision(path: Path) -> bool:
+    if path.exists():
+        return True
+    spec = importlib.util.find_spec("sitecustomize")
+    return bool(spec and spec.origin and Path(spec.origin).resolve() != path.resolve())
+
+
+ROUTE_SHIM = r'''import os
+from urllib.parse import quote
+import httpx
+
+class RouteTransport(httpx.BaseTransport):
+    def __init__(self, port):
+        self._transport = httpx.HTTPTransport()
+        self._port = int(port)
+    def handle_request(self, request):
+        workspace = os.environ.get("LIMITORA_OPENCODE_WORKSPACE_ID", "")
+        cookie = os.environ.get("LIMITORA_OPENCODE_AUTH_COOKIE", "")
+        expected = "https://opencode.ai/workspace/" + quote(workspace, safe="") + "/go"
+        if (request.method != "GET" or str(request.url) != expected
+                or request.headers.get_list("host") != ["opencode.ai"]
+                or request.headers.get_list("cookie") != ["auth=" + cookie]
+                or request.content != b""):
+            raise AssertionError("HTTPX request contract failed")
+        url = request.url.copy_with(scheme="http", authority="127.0.0.1:" + str(self._port))
+        rewritten = httpx.Request(request.method, url, headers=request.headers,
+                                  content=request.content)
+        return self._transport.handle_request(rewritten)
+    def close(self):
+        self._transport.close()
+
+class RoutedClient(httpx.Client):
+    def __init__(self, *args, **kwargs):
+        timeout = kwargs.get("timeout")
+        if (kwargs.get("follow_redirects") is not False or kwargs.get("trust_env") is not False
+                or not isinstance(timeout, httpx.Timeout) or not all(value and value > 0 for value in (timeout.connect, timeout.read, timeout.write, timeout.pool)) or "transport" in kwargs
+                or "proxy" in kwargs or "proxies" in kwargs):
+            raise AssertionError("HTTPX client contract failed")
+        kwargs["transport"] = RouteTransport(os.environ["LIMITORA_TEST_HTTPX_ROUTE_PORT"])
+        super().__init__(*args, **kwargs)
+
+httpx.Client = RoutedClient
+'''
+
+
+def install_sitecustomize(site_packages: Path) -> tuple[Path, str]:
+    path = sitecustomize_path(site_packages)
+    check(not sitecustomize_collision(path), "sitecustomize collision detected")
+    try:
+        with path.open("x", encoding="ascii", newline="") as stream:
+            stream.write(ROUTE_SHIM)
+    except FileExistsError:
+        raise AssertionError("sitecustomize collision detected")
+    return path, ROUTE_SHIM
+
+
+def cleanup_sitecustomize(path: Path, owned: str) -> None:
+    if path.is_file() and path.read_text(encoding="ascii") == owned:
+        path.unlink()
+
+
+def redacted(text: str) -> bool:
+    lowered = text.casefold()
+    return not any(marker.casefold() in lowered for marker in _SECRETS)
 
 
 class LivePreflightKind(str, Enum):
@@ -286,7 +368,7 @@ def live_smoke(cli: Path, environ: Mapping[str, str]) -> str:
     return outcome.kind.value
 
 
-def opencode_smoke(require_dependency: bool, site_packages: Path) -> None:
+def legacy_opencode_smoke(require_dependency: bool, site_packages: Path) -> None:
     import limitora
     from limitora.providers import AuthorizationPolicy, ProviderError, ProviderErrorKind
     from limitora.providers._opencode_go_httpx import _HttpxOpenCodeGoTransport
@@ -368,6 +450,68 @@ def opencode_smoke(require_dependency: bool, site_packages: Path) -> None:
         httpx.Client, socket.getaddrinfo, socket.socket, socket.create_connection = originals
 
 
+def opencode_smoke(require_dependency: bool, site_packages: Path) -> tuple[str, ...]:
+    import limitora
+    from limitora.providers import AuthorizationPolicy, ProviderError, ProviderErrorKind
+    from limitora.providers._opencode_go_httpx import _HttpxOpenCodeGoTransport
+    if not require_dependency:
+        check(importlib.util.find_spec("httpx") is None, "base installation unexpectedly contains httpx")
+        client = limitora.activate_provider(limitora.OpenCodeGoConfig("space/id", "synthetic-cookie"))
+        check(isinstance(client._service._provider._transport, _HttpxOpenCodeGoTransport), "production OpenCode Go transport was bypassed")
+        request = limitora.StatusRequest(frozenset({limitora.MetricKind.COMMERCIAL_QUOTA}), AuthorizationPolicy.DENY_AUTHORIZED_SOURCE, limitora.FreshnessPolicy(timedelta(minutes=5)))
+        try: client.read_status(request)
+        except ProviderError as error: check(error.kind is ProviderErrorKind.UNAUTHORIZED, "OpenCode Go deny path changed")
+        else: raise AssertionError("OpenCode Go deny path did not fail")
+        return ()
+    import httpx
+    check(under(Path(httpx.__file__), site_packages), "imported httpx is outside site-packages")
+    check(metadata.version("httpx") == httpx.__version__, "installed httpx version metadata mismatch")
+    owned_path, owned = install_sitecustomize(site_packages)
+    workspace, cookie = _SECRETS[:2]; payload = b'{"rollingUsage":{"usagePercent":25,"resetInSec":10},"weeklyUsage":{"usagePercent":50,"resetInSec":20},"monthlyUsage":{"usagePercent":75,"resetInSec":30}}'; results = []
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    try:
+        with tempfile.TemporaryDirectory(prefix="limitora-opencode-smoke-") as directory:
+            receipt_path = Path(directory) / "receipt.json"
+            for scenario in ROUTE_SCENARIOS:
+                state = {"requests": 0, "contract": True}; expected_path = "/workspace/" + quote(workspace, safe="") + "/go"
+                class Handler(BaseHTTPRequestHandler):
+                    protocol_version = "HTTP/1.0"
+                    def log_message(self, *args): pass
+                    def do_GET(self):
+                        state["requests"] += 1; length = self.headers.get("Content-Length")
+                        if length and length.isdigit() and int(length): self.rfile.read(int(length)); state["contract"] = False
+                        state["contract"] &= (self.path == expected_path and self.headers.get_all("Host") == ["opencode.ai"] and self.headers.get_all("Cookie") == ["auth=" + cookie] and length in (None, "0"))
+                        if scenario == "timeout": time.sleep(12); return
+                        if scenario == "redirect": self.send_response(302); self.send_header("Location", "https://opencode.ai/login"); self.end_headers(); return
+                        if scenario == "declared": self.send_response(200); self.send_header("Content-Length", str(512 * 1024 + 1)); self.end_headers(); return
+                        if scenario == "streamed": self.send_response(200); self.end_headers(); self.wfile.write(b"x" * (512 * 1024 + 1)); self.wfile.flush(); return
+                        status = int(scenario) if scenario in ("401", "403", "429") else 503 if scenario == "5xx" else 200
+                        body = payload if scenario == "valid" else payload.replace(b'"weeklyUsage":{"usagePercent":50,"resetInSec":20}', b'"weeklyUsage":{"usagePercent":"bad","resetInSec":20}') if scenario == "partial" else b"{raw-payload-marker" if scenario == "json" else b"<html>raw-payload-marker login</html>" if scenario == "html" else b"raw-payload-marker"
+                        self.send_response(status); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+                server = thread = None
+                try:
+                    if scenario != "connection":
+                        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler); server.daemon_threads = True; thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start(); port = server.server_address[1]
+                    else:
+                        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM); probe.bind(("127.0.0.1", 0)); port = probe.getsockname()[1]; probe.close()
+                    environment = os.environ.copy(); environment.update({"LIMITORA_OPENCODE_WORKSPACE_ID": workspace, "LIMITORA_OPENCODE_AUTH_COOKIE": cookie, ROUTE_PORT_ENV: str(port), ROUTE_SCENARIO_ENV: scenario, "HTTP_PROXY": "http://127.0.0.1:1/proxy/raw-proxy-marker", "HTTPS_PROXY": "http://127.0.0.1:1/proxy/raw-proxy-marker", "ALL_PROXY": "http://127.0.0.1:1/proxy/raw-proxy-marker", "http_proxy": "http://127.0.0.1:1/proxy/raw-proxy-marker", "https_proxy": "http://127.0.0.1:1/proxy/raw-proxy-marker", "all_proxy": "http://127.0.0.1:1/proxy/raw-proxy-marker"}); environment.pop("PYTHONPATH", None); environment.pop("PYTHONHOME", None); environment["PYTHONNOUSERSITE"] = "1"; route_config(environment)
+                    command = [str(cli), "status", "--json", "--provider", "opencode-go", "--opencode-allow-authorized-source"]
+                    completed = subprocess.run(command, cwd=Path.cwd(), env=environment, capture_output=True, text=True, check=False, timeout=15)
+                    check(completed.returncode == (0 if scenario in ("valid", "partial") else 5), "installed OpenCode scenario returned an unexpected exit")
+                    evidence = json.loads(completed.stdout)
+                    if scenario in ("valid", "partial"): check(evidence["result"] == "snapshot" and evidence["provider_id"] == {"value": "opencode-go"} and len(evidence["quota_windows"]) == (3 if scenario == "valid" else 2), "installed OpenCode snapshot evidence mismatch")
+                    else: check(evidence["result"] == "error", "installed OpenCode error envelope missing")
+                    check(redacted(completed.stdout + completed.stderr), "installed OpenCode output leaked unsafe evidence")
+                    if server is not None: check(state["requests"] == 1 and state["contract"], "loopback request contract failed")
+                    receipt_path.write_text(json.dumps({"scenario": scenario, "requests": state["requests"], "contract": bool(state["contract"])}), encoding="ascii"); check(redacted(receipt_path.read_text(encoding="ascii")), "OpenCode receipt leaked unsafe evidence"); results.append(scenario)
+                finally:
+                    if server is not None: server.shutdown(); server.server_close()
+                    if thread is not None: thread.join(timeout=2)
+    finally:
+        cleanup_sitecustomize(owned_path, owned)
+    return tuple(results)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--artifact", type=Path, required=True); parser.add_argument("--manifest", type=Path, required=True); parser.add_argument("--source-sha", type=Path, required=True)
@@ -381,10 +525,10 @@ def main() -> None:
     cli_smoke(args.cli)
     codex_smoke(args.cli)
     live_result = live_smoke(args.cli, os.environ)
-    opencode_smoke(args.require_opencode_dependency, site_packages)
+    opencode_scenarios = opencode_smoke(args.require_opencode_dependency, site_packages)
     for name, module in sys.modules.items():
         if name == "limitora" or name.startswith("limitora."): check((location := getattr(module, "__file__", None)) is not None and under(Path(location), site_packages), f"imported module is outside site-packages: {name}")
-    print(json.dumps({
+    evidence = {
         "source_sha": args.expected_source_sha,
         "artifact": args.artifact.name,
         "sha256": digest,
@@ -398,10 +542,13 @@ def main() -> None:
         "cli": "pass",
         "codex": "local-handshake-cleanup-pass",
         "live_codex": live_result,
-        "opencode_go": "installed-httpx-production-pass",
+        "opencode_go": "installed-httpx-loopback-pass",
+        "opencode_scenarios": {"count": len(opencode_scenarios), "names": opencode_scenarios},
         "opencode_go_dependency": "installed" if args.require_opencode_dependency else "absent",
-        "provider_scope": "PR2 smoke only; does not cover #18 provider protocol E2E",
-    }, sort_keys=True))
+        "provider_scope": "Installed OpenCode loopback scenarios only; no live service evidence",
+    }
+    check(redacted(json.dumps(evidence)), "final smoke evidence leaked unsafe evidence")
+    print(json.dumps(evidence, sort_keys=True))
 
 
 if __name__ == "__main__":
