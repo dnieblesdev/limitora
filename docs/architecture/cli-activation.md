@@ -165,6 +165,26 @@ The CLI calls `activate_provider` exclusively. The CLI never imports
 never executes runners. This boundary is enforced by a contract test in
 `tests/test_provider_composition.py::ActivateProviderTests`.
 
+## Installed provider boundary
+
+The installed-artifact smoke harness runs the installed `limitora` executable
+as a child process. Its Codex check supplies an absolute `sys.executable` and
+an absolute temporary fake executable script as the explicit runner. The fake
+is a second real child process: it validates the ordered handshake and emits a
+synthetic snapshot, so the smoke covers CLI activation, transport, mapping,
+rendering, and cleanup without a provider login or payload receipt.
+
+The harness also contains an opt-in live preflight controlled only by
+`LIMITORA_CODEX_LIVE=1`. Absent means skip without discovery; any other value
+fails safely. When enabled, discovery is only `shutil.which("codex")`, and the
+candidate must be a host-native absolute regular executable. Production code
+does not discover Codex binaries and no workflow enables this path.
+
+At the private Codex spawn boundary, the child receives a copied environment
+with `LIMITORA_OPENCODE_WORKSPACE_ID` and `LIMITORA_OPENCODE_AUTH_COOKIE`
+removed case-insensitively. Unrelated variables and process I/O semantics are
+preserved, and the parent `os.environ` is never mutated.
+
 ## Privacy guarantees
 
 | Rule | Enforcement |
@@ -206,21 +226,12 @@ A user that supplies `--auth-cookie` but forgets the corresponding
 | OpenCode end-to-end | `tests/test_opencode_go_composition.py::OpenCodeGoCompositionTests` | argv → `activate_provider` → `read_status` → stdout JSON; human mode; default DENY produces UNAUTHORIZED before transport |
 | Privacy (contract) | `tests/test_cli.py::PrivacyContractTests`, `tests/test_provider_composition.py::ProviderCompositionTests::test_errors_are_constant_and_redacted` | Source scan; stream scan; redacted messages; auth-cookie-never-leaks across all argv shapes |
 
-## Chained PRs (WU1 + WU2)
+## Issue #18 work units
 
-This slice was split into two stacked work units to keep each PR under
-the 400-line review budget. The chain strategy is `stacked-to-main`:
-each PR targets `main` after the previous one merges.
-
-| WU | Scope | PR |
-|----|-------|-----|
-| 1 | IR types, full grammar parser, `intent_to_config`, `activate_provider` (Codex branch + INVALID fallthrough for OpenCode), `main` orchestration with `--json` / `--help` / unconfigured / `CompositionError` routing, rewritten `_HELP`, grammar + Codex + JSON + privacy tests | PR 1 → `main` |
-| 2 | Fill `activate_provider` OpenCode branch (lazy `_HttpxOpenCodeGoTransport`); OpenCode end-to-end CLI tests; auth-cookie privacy tests; this document | PR 2 → `main` |
-
-**Grammar is frozen at the end of WU1.** WU2 does not modify the parser,
-the IR types, or the flag grammar. The intermediate state in WU1 was
-`--provider opencode-go …` parsing validly but `activate_provider`
-raising `CompositionError(INVALID)` (exit 2 stderr). WU2 enables it.
+WU1 established the dedicated OpenCode environment-backed input boundary.
+WU2 adds the Codex child-environment least-privilege contract and the
+installed-artifact fake-child E2E plus harness-only live preflight described
+above. The existing CLI grammar and provider discovery rules remain unchanged.
 
 ## Non-goals
 

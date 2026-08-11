@@ -2,13 +2,100 @@
 
 from __future__ import annotations
 
-import argparse, hashlib, importlib.util, json, os, platform, site, socket, subprocess, sys, sysconfig
+import argparse, hashlib, importlib.util, json, os, platform, shutil, site, socket, subprocess, sys, sysconfig, tempfile, time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from enum import Enum
 import importlib.metadata as metadata
 from pathlib import Path
+from typing import Callable, Mapping
+
+from limitora._runner_path import _is_native_absolute_runner_path
 
 
 HELP = "limitora status [--help] [--json] [--provider {codex,opencode-go}] [flags]\n  codex:        --runner PATH [--runner ARG ...]\n                A single absolute PATH uses 'app-server --stdio'.\n                [--codex-allow-authorized-source]\n  opencode-go:  --workspace-id ID --auth-cookie COOKIE\n                [--endpoint URL] [--timeout SECONDS]\n                [--opencode-allow-authorized-source]\n                or LIMITORA_OPENCODE_WORKSPACE_ID /\n                LIMITORA_OPENCODE_AUTH_COOKIE\nWithout --provider, status prints 'no provider configured' to stderr (exit 4).\n"
+LIVE_ENV = "LIMITORA_CODEX_LIVE"
+
+
+class LivePreflightKind(str, Enum):
+    SKIPPED = "skipped"
+    INVALID_OPT_IN = "invalid_opt_in"
+    MISSING = "missing"
+    RELATIVE = "relative"
+    INVALID = "invalid"
+    DIRECTORY = "directory"
+    NOT_EXECUTABLE = "not_executable"
+    READY = "ready"
+
+
+@dataclass(frozen=True)
+class LivePreflight:
+    kind: LivePreflightKind
+    runner: str | None = None
+
+    @property
+    def safe_message(self) -> str:
+        return {
+            LivePreflightKind.INVALID_OPT_IN: "live Codex opt-in must equal 1",
+            LivePreflightKind.MISSING: "live Codex executable was not discovered",
+            LivePreflightKind.RELATIVE: "discovered Codex executable is not host-absolute",
+            LivePreflightKind.INVALID: "discovered Codex executable is invalid",
+            LivePreflightKind.DIRECTORY: "discovered Codex executable is a directory",
+            LivePreflightKind.NOT_EXECUTABLE: "discovered Codex executable is not executable",
+        }.get(self.kind, "live Codex preflight skipped")
+
+
+class LiveOutcomeKind(str, Enum):
+    SUCCESS = "success"
+    PROVIDER_ERROR = "provider_error"
+    EXIT = "exit"
+
+
+@dataclass(frozen=True)
+class LiveOutcome:
+    kind: LiveOutcomeKind
+    exit_code: int
+
+
+def preflight_live_codex(
+    environ: Mapping[str, str],
+    *,
+    which: Callable[[str], str | None] | None = None,
+) -> LivePreflight:
+    value = environ.get(LIVE_ENV)
+    if value is None:
+        return LivePreflight(LivePreflightKind.SKIPPED)
+    if value != "1":
+        return LivePreflight(LivePreflightKind.INVALID_OPT_IN)
+    candidate = (shutil.which if which is None else which)("codex")
+    if candidate is None:
+        return LivePreflight(LivePreflightKind.MISSING)
+    if not _is_native_absolute_runner_path(candidate):
+        return LivePreflight(LivePreflightKind.RELATIVE)
+    path = Path(candidate)
+    if not path.exists():
+        return LivePreflight(LivePreflightKind.INVALID)
+    if path.is_dir():
+        return LivePreflight(LivePreflightKind.DIRECTORY)
+    if not path.is_file():
+        return LivePreflight(LivePreflightKind.INVALID)
+    if not os.access(path, os.X_OK):
+        return LivePreflight(LivePreflightKind.NOT_EXECUTABLE)
+    return LivePreflight(LivePreflightKind.READY, candidate)
+
+
+def classify_live_outcome(exit_code: int, stdout: str) -> LiveOutcome:
+    try:
+        payload = json.loads(stdout)
+    except (TypeError, json.JSONDecodeError):
+        return LiveOutcome(LiveOutcomeKind.EXIT, exit_code)
+    if exit_code == 0 and isinstance(payload, dict) and payload.get("result") == "snapshot":
+        provider = payload.get("provider_id")
+        if isinstance(provider, dict) and provider.get("value") == "codex":
+            return LiveOutcome(LiveOutcomeKind.SUCCESS, exit_code)
+    if exit_code == 5 and isinstance(payload, dict) and isinstance(payload.get("error"), dict):
+        return LiveOutcome(LiveOutcomeKind.PROVIDER_ERROR, exit_code)
+    return LiveOutcome(LiveOutcomeKind.EXIT, exit_code)
 
 
 def check(condition: bool, message: str) -> None:
@@ -112,36 +199,91 @@ payload = {"rateLimits": {"limitId": "codex", "planType": "plus",
     "primary": {"windowDurationMins": 300, "usedPercent": 25, "resetsAt": 2000000000},
     "secondary": {"windowDurationMins": 10080, "usedPercent": 50, "resetsAt": 2000000000}}}
 methods = []
+client_info_present = False
+receipt_path = os.environ.get("LIMITORA_CODEX_RECEIPT")
+if receipt_path is None:
+    raise SystemExit("fixture receipt is not configured")
+private_names = {"limitora_opencode_workspace_id", "limitora_opencode_auth_cookie"}
+if any(name.casefold() in private_names for name in os.environ):
+    raise SystemExit("fixture received a private environment value")
 for expected in ("initialize", "initialized", "account/rateLimits/read"):
-    message = json.loads(sys.stdin.readline())
-    if message.get("method") != expected: raise SystemExit("unexpected fixture method")
+    raw = sys.stdin.buffer.readline()
+    if not raw: raise SystemExit("fixture input ended")
+    message = json.loads(raw)
+    if message.get("method") != expected: raise SystemExit("fixture method order mismatch")
+    if expected == "initialize":
+        if set(message) != {"id", "method", "params"} or message.get("id") != 1:
+            raise SystemExit("fixture initialize envelope mismatch")
+        params = message.get("params")
+        client_info = params.get("clientInfo") if isinstance(params, dict) else None
+        if not isinstance(client_info, dict) or not client_info.get("name") or not client_info.get("version"):
+            raise SystemExit("fixture client info missing")
+        client_info_present = True
+    elif expected == "initialized":
+        if set(message) != {"method", "params"} or message.get("params") != {}:
+            raise SystemExit("fixture initialized envelope mismatch")
+    elif set(message) != {"id", "method", "params"} or message.get("id") != 2 or message.get("params") != {}:
+        raise SystemExit("fixture rate limit envelope mismatch")
+    if "jsonrpc" in message: raise SystemExit("fixture received jsonrpc envelope")
     methods.append(expected)
     if expected == "initialize": result = {"id": 1, "result": {}}
     elif expected == "account/rateLimits/read":
-        with open(os.environ["LIMITORA_CODEX_RECEIPT"], "w", encoding="ascii") as receipt: json.dump(methods, receipt)
+        with open(receipt_path, "w", encoding="ascii") as receipt:
+            json.dump({"methods": methods, "client_info": client_info_present, "private_env": False, "pid": os.getpid()}, receipt)
         result = {"id": 2, "result": payload}
     else: continue
     print(json.dumps(result, separators=(",", ":")), flush=True)
 time.sleep(60)'''
 
 
-def codex_smoke() -> None:
-    import limitora
-    from limitora.models import MetricKind
-    from limitora.providers import AuthorizationPolicy, ProviderRequest
-    from limitora.providers.codex import CodexProvider
-
-    fixture = Path.cwd() / "codex-local-fixture.py"
-    receipt = Path.cwd() / "codex-local-receipt.json"
-    fixture.write_text(CODEX_FIXTURE, encoding="ascii")
-    runner = (sys.executable, str(fixture))
+def codex_smoke(cli: Path) -> None:
     check(Path(sys.executable).is_absolute(), "Codex interpreter path is not absolute")
-    environment = os.environ.copy(); environment["LIMITORA_CODEX_RECEIPT"] = str(receipt); previous = os.environ.get("LIMITORA_CODEX_RECEIPT"); os.environ.update(environment)
-    provider = CodexProvider(runner, limitora.CurrentClock())
-    snapshot = provider.fetch(ProviderRequest(frozenset({MetricKind.COMMERCIAL_QUOTA}), AuthorizationPolicy.ALLOW_AUTHORIZED_SOURCE))
-    if previous is None: os.environ.pop("LIMITORA_CODEX_RECEIPT", None)
-    else: os.environ["LIMITORA_CODEX_RECEIPT"] = previous
-    check(snapshot.provider_id.value == "codex", "Codex installed provider failed"); check(json.loads(receipt.read_text(encoding="ascii")) == ["initialize", "initialized", "account/rateLimits/read"], "Codex local process handshake transcript mismatch")
+    with tempfile.TemporaryDirectory(prefix="limitora-codex-smoke-") as directory:
+        root = Path(directory); fixture = root / "fake-codex.py"; receipt = root / "receipt.json"
+        fixture.write_text(CODEX_FIXTURE, encoding="ascii")
+        environment = os.environ.copy(); environment["LIMITORA_CODEX_RECEIPT"] = str(receipt)
+        environment["LIMITORA_OPENCODE_WORKSPACE_ID"] = "synthetic-workspace-secret"
+        environment["lImItOrA_oPeNcOdE_aUtH_cOoKiE"] = "synthetic-auth-cookie"
+        command = [str(cli), "status", "--provider", "codex", "--runner", str(sys.executable), "--runner", str(fixture), "--codex-allow-authorized-source"]
+        for arguments, expected_json in ((command, False), (command[:2] + ["--json"] + command[2:], True)):
+            if receipt.exists(): receipt.unlink()
+            started = time.monotonic()
+            completed = subprocess.run(arguments, cwd=Path.cwd(), env=environment, capture_output=True, text=True, check=False, timeout=10)
+            check(time.monotonic() - started < 10, "Codex child cleanup exceeded the smoke bound")
+            check(completed.returncode == 0, "installed Codex CLI failed")
+            output = completed.stdout + completed.stderr
+            for marker in ("rateLimits", "limitId", "Traceback", "auth", "synthetic-workspace-secret", "synthetic-auth-cookie"):
+                check(marker.casefold() not in output.casefold(), "installed Codex output leaked unsafe evidence")
+            receipt_data = json.loads(receipt.read_text(encoding="ascii"))
+            check(receipt_data["methods"] == ["initialize", "initialized", "account/rateLimits/read"], "Codex fixture order mismatch")
+            check(receipt_data == {"methods": receipt_data["methods"], "client_info": True, "private_env": False, "pid": receipt_data["pid"]}, "Codex receipt contains non-structural evidence")
+            if expected_json:
+                payload = json.loads(completed.stdout)
+                check(payload["result"] == "snapshot" and payload["provider_id"] == {"value": "codex"}, "installed Codex JSON identity mismatch")
+                windows = {(window["period"], window["plan_id"], window["used"]["value"], window["remaining"]["value"]) for window in payload["quota_windows"]}
+                check(windows == {("five_hour", "plus", "25", "75"), ("weekly", "plus", "50", "50")}, "installed Codex JSON windows mismatch")
+            else:
+                check("PROVIDER: codex" in completed.stdout and "SOURCE: codex-app-server-v2" in completed.stdout, "installed Codex human identity mismatch")
+                check("PERIOD: five_hour" in completed.stdout and "PERIOD: weekly" in completed.stdout, "installed Codex human windows mismatch")
+        return
+
+
+def live_smoke(cli: Path, environ: Mapping[str, str]) -> str:
+    preflight = preflight_live_codex(environ)
+    if preflight.kind is LivePreflightKind.SKIPPED:
+        return preflight.kind.value
+    check(preflight.kind is LivePreflightKind.READY, preflight.safe_message)
+    assert preflight.runner is not None
+    command = [str(cli), "status", "--json", "--provider", "codex", "--runner", preflight.runner, "--codex-allow-authorized-source"]
+    try:
+        completed = subprocess.run(command, cwd=Path.cwd(), env=dict(environ), capture_output=True, text=True, check=False, timeout=30)
+    except subprocess.TimeoutExpired:
+        check(False, "live Codex CLI timed out")
+    except OSError:
+        check(False, "live Codex CLI could not start")
+    outcome = classify_live_outcome(completed.returncode, completed.stdout)
+    check(outcome.kind in (LiveOutcomeKind.SUCCESS, LiveOutcomeKind.PROVIDER_ERROR), "live Codex CLI returned an unclassified result")
+    return outcome.kind.value
 
 
 def opencode_smoke(require_dependency: bool, site_packages: Path) -> None:
@@ -237,7 +379,8 @@ def main() -> None:
     site_packages, distribution = assert_isolated(args.checkout, args.expected_version)
     api_smoke()
     cli_smoke(args.cli)
-    codex_smoke()
+    codex_smoke(args.cli)
+    live_result = live_smoke(args.cli, os.environ)
     opencode_smoke(args.require_opencode_dependency, site_packages)
     for name, module in sys.modules.items():
         if name == "limitora" or name.startswith("limitora."): check((location := getattr(module, "__file__", None)) is not None and under(Path(location), site_packages), f"imported module is outside site-packages: {name}")
@@ -254,6 +397,7 @@ def main() -> None:
         "api": "pass",
         "cli": "pass",
         "codex": "local-handshake-cleanup-pass",
+        "live_codex": live_result,
         "opencode_go": "installed-httpx-production-pass",
         "opencode_go_dependency": "installed" if args.require_opencode_dependency else "absent",
         "provider_scope": "PR2 smoke only; does not cover #18 provider protocol E2E",
