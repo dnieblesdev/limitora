@@ -16,10 +16,17 @@ Flag grammar (all forms are space-separated, ``--key=value`` is rejected):
     opencode-go:  --workspace-id ID --auth-cookie COOKIE
                   [--endpoint URL] [--timeout SECONDS]
                   [--opencode-allow-authorized-source]
+
+OpenCode Go also accepts ``LIMITORA_OPENCODE_WORKSPACE_ID`` and
+``LIMITORA_OPENCODE_AUTH_COOKIE`` through the explicit CLI environment
+boundary. A field cannot be supplied by both its flag and its environment
+variable.
 """
 
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
+from collections.abc import Mapping
+from os import environ as _process_environment
 import sys
 from typing import Literal, Protocol, TextIO
 
@@ -52,6 +59,8 @@ _HELP = (
     "  opencode-go:  --workspace-id ID --auth-cookie COOKIE\n"
     "                [--endpoint URL] [--timeout SECONDS]\n"
     "                [--opencode-allow-authorized-source]\n"
+    "                or LIMITORA_OPENCODE_WORKSPACE_ID /\n"
+    "                LIMITORA_OPENCODE_AUTH_COOKIE\n"
     "Without --provider, status prints 'no provider configured' to stderr (exit 4).\n"
 )
 _USAGE = "Usage: limitora status [--help] [--json] [--provider {codex,opencode-go}] [flags]\n"
@@ -72,6 +81,8 @@ _DEFAULT_ENDPOINT = "https://opencode.ai"
 _DEFAULT_TIMEOUT_SECONDS = 10
 _MAX_TIMEOUT_SECONDS = 10
 _UNCONFIGURED_MESSAGE = "ERROR: no provider configured\n"
+OPENCODE_WORKSPACE_ID_ENV = "LIMITORA_OPENCODE_WORKSPACE_ID"
+OPENCODE_AUTH_COOKIE_ENV = "LIMITORA_OPENCODE_AUTH_COOKIE"
 
 
 class StatusReader(Protocol):
@@ -145,7 +156,24 @@ def _usage_error(message: str) -> CliUsageError:
     return CliUsageError(f"{_USAGE}{message}\n")
 
 
-def parse(argv: list[str]) -> CliIntent:
+def _resolve_opencode_source(
+    flag_value: str | None,
+    flag_name: str,
+    environment_name: str,
+    environ: Mapping[str, str],
+) -> str | None:
+    environment_present = environment_name in environ
+    if flag_value is not None and environment_present:
+        raise _usage_error(f"{flag_name} and {environment_name} cannot both be set")
+    if not environment_present:
+        return flag_value
+    value = environ[environment_name]
+    if not value.strip():
+        raise _usage_error(f"{environment_name} must not be empty")
+    return value
+
+
+def parse(argv: list[str], *, environ: Mapping[str, str] | None = None) -> CliIntent:
     """Hand-rolled argv parser. Builds a typed :class:`CliIntent`; never constructs providers.
 
     Raises :class:`CliUsageError` for any structural or semantic grammar
@@ -233,10 +261,13 @@ def parse(argv: list[str]) -> CliIntent:
             continue
         # Unknown flag or unexpected positional
         if "=" in token:
-            raise _usage_error(f"--key=value form is not supported: {token}")
+            raise _usage_error("--key=value form is not supported")
         if not token.startswith("--"):
-            raise _usage_error(f"unexpected positional: {token}")
-        raise _usage_error(f"unknown flag: {token}")
+            raise _usage_error("unexpected positional argument")
+        raise _usage_error("unknown flag")
+
+    if help_seen:
+        return CliIntent(help_requested=True, json_requested=json_seen, provider=provider)
 
     # Cross-flag checks: a codex flag without codex provider (or with opencode)
     if (codex_runner or codex_allow) and provider is not None and provider != "codex":
@@ -245,6 +276,15 @@ def parse(argv: list[str]) -> CliIntent:
             or opencode_endpoint is not None or opencode_timeout is not None
             or opencode_allow) and provider is not None and provider != "opencode-go":
         raise _usage_error("opencode-go flags require --provider opencode-go")
+
+    if provider == "opencode-go":
+        environment = _process_environment if environ is None else environ
+        opencode_workspace = _resolve_opencode_source(
+            opencode_workspace, "--workspace-id", OPENCODE_WORKSPACE_ID_ENV, environment
+        )
+        opencode_cookie = _resolve_opencode_source(
+            opencode_cookie, "--auth-cookie", OPENCODE_AUTH_COOKIE_ENV, environment
+        )
 
     # Missing-required checks
     if provider == "codex" and not codex_runner:
@@ -337,12 +377,13 @@ def _render_result(
 
 
 def main(argv: list[str] | None = None, *, client_factory=None,
-         stdout: TextIO | None = None, stderr: TextIO | None = None) -> int:
+         stdout: TextIO | None = None, stderr: TextIO | None = None,
+         environ: Mapping[str, str] | None = None) -> int:
     arguments = sys.argv[1:] if argv is None else argv
     out, err = sys.stdout if stdout is None else stdout, sys.stderr if stderr is None else stderr
 
     try:
-        intent = parse(arguments)
+        intent = parse(arguments, environ=environ)
     except CliUsageError as usage:
         message = str(usage)
         err.write(message if message.endswith("\n") else f"{message}\n")

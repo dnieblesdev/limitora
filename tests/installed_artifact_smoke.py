@@ -8,7 +8,7 @@ import importlib.metadata as metadata
 from pathlib import Path
 
 
-HELP = "limitora status [--help] [--json] [--provider {codex,opencode-go}] [flags]\n  codex:        --runner PATH [--runner ARG ...]\n                A single absolute PATH uses 'app-server --stdio'.\n                [--codex-allow-authorized-source]\n  opencode-go:  --workspace-id ID --auth-cookie COOKIE\n                [--endpoint URL] [--timeout SECONDS]\n                [--opencode-allow-authorized-source]\nWithout --provider, status prints 'no provider configured' to stderr (exit 4).\n"
+HELP = "limitora status [--help] [--json] [--provider {codex,opencode-go}] [flags]\n  codex:        --runner PATH [--runner ARG ...]\n                A single absolute PATH uses 'app-server --stdio'.\n                [--codex-allow-authorized-source]\n  opencode-go:  --workspace-id ID --auth-cookie COOKIE\n                [--endpoint URL] [--timeout SECONDS]\n                [--opencode-allow-authorized-source]\n                or LIMITORA_OPENCODE_WORKSPACE_ID /\n                LIMITORA_OPENCODE_AUTH_COOKIE\nWithout --provider, status prints 'no provider configured' to stderr (exit 4).\n"
 
 
 def check(condition: bool, message: str) -> None:
