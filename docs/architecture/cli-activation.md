@@ -75,8 +75,9 @@ The CLI accepts an injectable environment mapping for deterministic callers and
 tests and never mutates the process environment. A flag and its corresponding
 environment variable together are a usage error; values are never included in
 usage errors, help, representations, or output. Production and core code do
-not load `.env` files. A future local E2E harness may load an untracked `.env`
-and populate these variables; CI maps secrets directly to them.
+not load `.env` files. The separate local `scripts/opencode_live_driver.py`
+operator boundary may load a path supplied explicitly with `--dotenv`; CI does
+not enable this local driver.
 
 Unknown flags, missing values, duplicate single-cardinality flags,
 unexpected positionals, and cross-provider flags all return exit 2 with a
@@ -245,8 +246,9 @@ WU2 adds the Codex child-environment least-privilege contract and the
 installed-artifact fake-child E2E plus harness-only live preflight described
 above. The existing CLI grammar and provider discovery rules remain unchanged.
 WU3 adds the installed OpenCode Go loopback protocol matrix and public HTTPX
-transport boundary described above. It provides no live OpenCode availability
-or upstream-schema evidence.
+transport boundary described above. WU4A adds only the local live driver and
+operator boundary; it provides no live OpenCode availability or upstream-schema
+evidence here.
 
 ## Non-goals
 

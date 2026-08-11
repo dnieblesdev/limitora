@@ -23,3 +23,11 @@ This directory holds helper scripts for development, research, and diagnostics.
 - Storing `.env` files or credentials.
 - Writing unredacted diagnostic dumps.
 - Network calls that are not explicitly documented in the script header.
+
+## OpenCode live driver
+
+`opencode_live_driver.py` is an explicit local operator boundary. It invokes an
+installed Limitora CLI only after `--confirm RUN`, reads the two required inputs
+from the process environment or an explicitly supplied owner-only dotenv file,
+and emits one constant classification line. It does not import Limitora,
+discover files, load dotenv implicitly, or print provider payloads.
