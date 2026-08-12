@@ -31,11 +31,11 @@ class OpenCodeGoProviderTests(unittest.TestCase):
         self.assertEqual(0, provider._transport.calls)
 
     def provider(self, result):
-        config = OpenCodeGoConfig("workspace", "secret", "https://opencode.ai", timedelta(seconds=10))
+        config = OpenCodeGoConfig("secret", timedelta(seconds=10))
         return OpenCodeGoProvider(config, StubTransport(result), clock=lambda: NOW)
 
     def test_maps_three_approved_windows_with_one_fetch_timestamp_and_planless_identity(self):
-        body = b'{"rollingUsage":{"usagePercent":25,"resetInSec":10},"weeklyUsage":{"usagePercent":50,"resetInSec":20},"monthlyUsage":{"usagePercent":75,"resetInSec":30},"subscriptionPlan":null}'
+        body = b'{"usage":{"rolling":{"status":"ok","percent":25,"resetsAt":"2026-07-18T12:00:10Z"},"weekly":{"status":"rate-limited","percent":50,"resetsAt":"2026-07-18T12:00:20Z"},"monthly":{"status":"ok","percent":75,"resetsAt":"2026-07-18T12:00:30Z"}}}'
         snapshot = self.provider(HttpResponse(200, body)).fetch(self.request())
 
         self.assertEqual(ProviderState.AVAILABLE, snapshot.status.state)
@@ -45,19 +45,27 @@ class OpenCodeGoProviderTests(unittest.TestCase):
         self.assertEqual(Decimal("75"), snapshot.quota_windows[0].remaining.value)
 
     def test_invalid_sibling_is_partial_and_no_valid_window_is_parse_failure(self):
-        body = b'{"rollingUsage":{"usagePercent":25,"resetInSec":10},"weeklyUsage":{"usagePercent":101,"resetInSec":20}}'
+        body = b'{"usage":{"rolling":{"status":"ok","percent":25,"resetsAt":"2026-07-18T12:00:10Z"},"weekly":{"status":"ok","percent":101,"resetsAt":"2026-07-18T12:00:20Z"}}}'
         result = self.provider(HttpResponse(200, body)).fetch(self.request())
         self.assertEqual(ProviderState.PARTIAL, result.status.state)
         self.assertEqual(("five_hour",), tuple(w.period for w in result.quota_windows))
 
         with self.assertRaises(ProviderError) as raised:
-            self.provider(HttpResponse(200, b'{"weeklyUsage":{}}')).fetch(self.request())
+            self.provider(HttpResponse(200, b'{"usage":{"weekly":{}}}')).fetch(self.request())
         self.assertEqual(ProviderErrorKind.PARSE_FAILED, raised.exception.kind)
         self.assertEqual("OpenCode Go response has no valid quota window", raised.exception.safe_message)
 
-    def test_html_login_and_malformed_bodies_are_safe_parse_failures(self):
+    def test_non_string_status_values_keep_nested_window_parsing_fail_closed(self):
+        for status in (b"[]", b"{\"private\":\"secret\"}"):
+            with self.subTest(status=status):
+                body = b'{"usage":{"rolling":{"status":"ok","percent":25,"resetsAt":"2026-07-18T12:00:10Z"},"weekly":{"status":' + status + b',"percent":50,"resetsAt":"2026-07-18T12:00:20Z"}}}'
+                result = self.provider(HttpResponse(200, body)).fetch(self.request())
+                self.assertEqual(ProviderState.PARTIAL, result.status.state)
+                self.assertEqual(("five_hour",), tuple(w.period for w in result.quota_windows))
+
+    def test_malformed_bodies_are_safe_parse_failures(self):
         cases = (
-            (b"<html><body>login</body></html>", "OpenCode Go response contains an HTML document"),
+            (b"<html><body>login</body></html>", "OpenCode Go response is not valid UTF-8 JSON"),
             (b"not-json", "OpenCode Go response is not valid UTF-8 JSON"),
             (b"\xff", "OpenCode Go response is not valid UTF-8 JSON"),
             (b"[]", "OpenCode Go response JSON root is not an object"),

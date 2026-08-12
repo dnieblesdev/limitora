@@ -174,7 +174,7 @@ print(json.dumps({name: name in sys.modules for name in names}, sort_keys=True))
     def test_consumers_construct_and_reuse_one_client_per_provider_from_root(self) -> None:
         configs: tuple[ProviderConfig, ...] = (
             CodexJsonlConfig(NATIVE_RUNNER),
-            OpenCodeGoConfig("workspace", "opaque-cookie"),
+            OpenCodeGoConfig("opaque-api-key"),
         )
 
         for config in configs:
@@ -188,7 +188,7 @@ print(json.dumps({name: name in sys.modules for name in names}, sort_keys=True))
 
     def test_root_construction_preserves_safe_validation_errors(self) -> None:
         secret = "public-construction-secret"
-        config = OpenCodeGoConfig(secret, secret, endpoint="https://invalid.example")
+        config = OpenCodeGoConfig(secret, timeout=timedelta(0))
 
         with self.assertLogs("limitora.consumer", level="INFO") as captured:
             logging.getLogger("limitora.consumer").info("config=%r", config)

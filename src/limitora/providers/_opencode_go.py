@@ -20,7 +20,6 @@ from .ports import HttpResponse, PortFailure, PortKind
 
 PARSE_FAILED_INVALID_UTF8_JSON = "OpenCode Go response is not valid UTF-8 JSON"
 PARSE_FAILED_NON_OBJECT_JSON = "OpenCode Go response JSON root is not an object"
-PARSE_FAILED_HTML_DOCUMENT = "OpenCode Go response contains an HTML document"
 
 
 class _OpenCodeGoTransport(Protocol):
@@ -29,16 +28,14 @@ class _OpenCodeGoTransport(Protocol):
 
 @dataclass(frozen=True)
 class OpenCodeGoConfig:
-    workspace_id: str = field(repr=False)
-    auth_cookie: str = field(repr=False)
-    endpoint: str
+    api_key: str = field(repr=False)
     timeout: timedelta
 
 
 class OpenCodeGoProvider(ProviderReader):
     PROVIDER_ID = ProviderId("opencode-go")
-    SOURCE = SourceMetadata("opencode-go-dashboard")
-    _WINDOWS = (("rollingUsage", "five_hour", WindowKind.COMMERCIAL_QUOTA), ("weeklyUsage", "weekly", WindowKind.COMMERCIAL_QUOTA), ("monthlyUsage", "monthly", WindowKind.COMMERCIAL_QUOTA))
+    SOURCE = SourceMetadata("opencode-go-api")
+    _WINDOWS = (("rolling", "five_hour", WindowKind.COMMERCIAL_QUOTA), ("weekly", "weekly", WindowKind.COMMERCIAL_QUOTA), ("monthly", "monthly", WindowKind.COMMERCIAL_QUOTA))
 
     def __init__(self, config: OpenCodeGoConfig, transport: _OpenCodeGoTransport, *, clock: Callable[[], datetime] | None = None) -> None:
         self._config = config
@@ -68,8 +65,6 @@ class OpenCodeGoProvider(ProviderReader):
             raise ProviderError(ProviderErrorKind.SOURCE_UNAVAILABLE, self.PROVIDER_ID, "OpenCode Go source is unavailable", retryable=True)
         if 300 <= result.status_code <= 399 or not 200 <= result.status_code <= 299:
             raise ProviderError(ProviderErrorKind.UNSUPPORTED, self.PROVIDER_ID, "OpenCode Go response is unsupported", retryable=False)
-        if b"<html" in result.body.lower() or b"<body" in result.body.lower():
-            raise ProviderError(ProviderErrorKind.PARSE_FAILED, self.PROVIDER_ID, PARSE_FAILED_HTML_DOCUMENT, retryable=False)
         try:
             payload = json.loads(result.body)
         except (UnicodeDecodeError, TypeError, json.JSONDecodeError):
@@ -77,22 +72,34 @@ class OpenCodeGoProvider(ProviderReader):
         if not isinstance(payload, dict):
             raise ProviderError(ProviderErrorKind.PARSE_FAILED, self.PROVIDER_ID, PARSE_FAILED_NON_OBJECT_JSON, retryable=False)
         fetched_at = self._clock()
-        windows = tuple(self._window(payload, key, period, kind, fetched_at) for key, period, kind in self._WINDOWS)
+        usage = payload.get("usage")
+        if not isinstance(usage, dict):
+            raise ProviderError(ProviderErrorKind.PARSE_FAILED, self.PROVIDER_ID, "OpenCode Go response has no valid quota window", retryable=False)
+        windows = tuple(self._window(usage, key, period, kind) for key, period, kind in self._WINDOWS)
         valid = tuple(window for window in windows if window is not None)
         if not valid:
             raise ProviderError(ProviderErrorKind.PARSE_FAILED, self.PROVIDER_ID, "OpenCode Go response has no valid quota window", retryable=False)
         state = ProviderState.AVAILABLE if len(valid) == len(self._WINDOWS) else ProviderState.PARTIAL
         return ProviderSnapshot(self.PROVIDER_ID, ProviderStatus(self.PROVIDER_ID, state, fetched_at), fetched_at, fetched_at, self.SOURCE, valid)
 
-    def _window(self, payload, key, period, kind, fetched_at):
+    def _window(self, payload, key, period, kind):
         value = payload.get(key)
         if not isinstance(value, dict):
             return None
-        usage = value.get("usagePercent")
-        reset = value.get("resetInSec")
+        status = value.get("status")
+        usage = value.get("percent")
+        reset = value.get("resetsAt")
+        if not isinstance(status, str) or status not in {"ok", "rate-limited"}:
+            return None
         if isinstance(usage, bool) or not isinstance(usage, (int, float)) or not math.isfinite(usage) or not 0 <= usage <= 100:
             return None
-        if isinstance(reset, bool) or not isinstance(reset, int) or reset < 0:
+        if not isinstance(reset, str) or not reset.strip():
+            return None
+        try:
+            reset_at = datetime.fromisoformat(reset.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if reset_at.tzinfo is None or reset_at.utcoffset() is None:
             return None
         used = Decimal(str(usage))
         limit = Decimal("100")
@@ -100,4 +107,4 @@ class OpenCodeGoProvider(ProviderReader):
                            Quantity(limit, MetricKind.COMMERCIAL_QUOTA, "percentage_points"),
                            Quantity(used, MetricKind.COMMERCIAL_QUOTA, "percentage_points"),
                            Quantity(limit - used, MetricKind.COMMERCIAL_QUOTA, "percentage_points"),
-                           fetched_at + timedelta(seconds=reset))
+                           reset_at)
