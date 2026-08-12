@@ -63,7 +63,7 @@ Limitora never imports YASB, PyQt, Waybar, or any UI integration.
 | Provider | Status | Boundary |
 |----------|--------|----------|
 | Codex | implemented | Explicit Codex JSONL adapter; authorized source is opt-in. |
-| OpenCode Go | implemented, opt-in | Explicit dashboard adapter; authorization and endpoint behavior are qualified. |
+| OpenCode Go | implemented, opt-in | Explicit supported API adapter using a Bearer API key. |
 | Claude / Gemini | not shipped | No adapter or support promise. |
 
 ## Public API
@@ -75,11 +75,11 @@ Consumers construct and retain one client for the selected provider:
 ```python
 from limitora import OpenCodeGoConfig, activate_provider
 
-config = OpenCodeGoConfig(workspace_id, auth_cookie)
+config = OpenCodeGoConfig(api_key)
 client = activate_provider(config)
 ```
 
-The consuming application owns environment or configuration access and passes values explicitly. The `limitora status` CLI additionally accepts OpenCode Go values from `LIMITORA_OPENCODE_WORKSPACE_ID` and `LIMITORA_OPENCODE_AUTH_COOKIE`; it rejects mixing a flag with its corresponding variable and never loads `.env` files. Treat both `workspace_id` and `auth_cookie` as sensitive. Limitora-controlled representations omit them, and request representations omit workspace-bearing URLs, headers, and bodies.
+The consuming application owns environment or configuration access and passes the API key explicitly. The `limitora status` CLI accepts `LIMITORA_OPENCODE_API_KEY` or `--api-key`; it never loads `.env` files. Treat the API key as sensitive. Limitora-controlled representations omit it, and request representations omit credentials, headers, and bodies.
 
 ## CLI status
 

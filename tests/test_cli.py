@@ -372,8 +372,6 @@ class ParseUnitTests(unittest.TestCase):
             ["status", "extra"],
             ["status", "--provider=codex"],
             ["status", "--bogus"],
-            ["status", "--provider", "opencode-go", "--workspace-id", "ws"],
-            ["status", "--provider", "opencode-go", "--auth-cookie", "cookie"],
             ["status", "--provider", "opencode-go", "--endpoint", "https://evil.example"],
         )
         for argv in cases:
@@ -586,16 +584,6 @@ class PrivacyContractTests(unittest.TestCase):
         self.assertNotIn("synthetic-workspace", output + errors)
         self.assertNotIn("synthetic-cookie", output + errors)
 
-    def test_legacy_opencode_environment_names_are_not_supported_inputs(self):
-        code, output, errors, _, _ = invoke(["status", "--provider", "opencode-go"], environ={
-            "LIMITORA_OPENCODE_WORKSPACE_ID": "legacy-workspace",
-            "LIMITORA_OPENCODE_AUTH_COOKIE": "legacy-cookie",
-        })
-        self.assertEqual(2, code)
-        self.assertIn("--api-key", errors)
-        self.assertNotIn("legacy-workspace", output + errors)
-        self.assertNotIn("legacy-cookie", output + errors)
-
     def test_cli_environment_mapping_is_not_mutated(self):
         environ = {
             OPENCODE_API_KEY_ENV: "synthetic-api-key",
@@ -639,7 +627,7 @@ class PrivacyContractTests(unittest.TestCase):
         self.assertNotIn("__cause__", output + errors)
 
     def test_opencode_go_path_default_deny_never_echoes_api_key(self):
-        """WU2: auth cookie never appears in any captured stream, default DENY."""
+        """The API key never appears in any captured stream, default DENY."""
         code, output, errors, _, _ = invoke([
             "status", "--provider", "opencode-go",
             "--api-key", "opaque-secret-api-key",
@@ -653,7 +641,7 @@ class PrivacyContractTests(unittest.TestCase):
         self.assertNotIn("__cause__", errors)
 
     def test_opencode_go_path_with_allow_authorized_never_echoes_api_key(self):
-        """WU2: auth cookie never appears when transport is exercised under ALLOW.
+        """The API key never appears when transport is exercised under ALLOW.
 
         The real httpx transport is patched so this offline contract test does
         not issue a live HTTP request.
@@ -682,7 +670,7 @@ class PrivacyContractTests(unittest.TestCase):
         self.assertNotIn("__cause__", combined)
 
     def test_opencode_go_path_with_json_never_echoes_api_key(self):
-        """WU2: auth cookie never appears in the JSON envelope on stdout."""
+        """The API key never appears in the JSON envelope on stdout."""
         code, output, errors, _, _ = invoke([
             "status", "--json", "--provider", "opencode-go",
             "--api-key", "opaque-secret-api-key",
@@ -695,7 +683,7 @@ class PrivacyContractTests(unittest.TestCase):
         self.assertNotIn("Traceback", output)
         self.assertNotIn("__cause__", output)
 
-    def test_opencode_intent_repr_hides_workspace_and_cookie(self):
+    def test_opencode_intent_repr_hides_api_key(self):
         sentinel = "unique-cli-sensitive-sentinel"
         intent = OpenCodeGoIntent(api_key=sentinel)
 
