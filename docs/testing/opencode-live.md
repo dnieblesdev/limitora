@@ -33,14 +33,17 @@ not provided by this driver.
 The single output line is `OpenCode live result: <classification>`. Codes are
 `0` success, `10` preflight, `20` authentication, `21` schema drift, `22` rate
 limited, `23` source unavailable, `24` transport, `25` unexpected regression,
-`26` generic provider parse failure, `27` unsupported provider capability, `28`
-response parse failure, and `29` no valid quota window.
+`26` generic provider parse failure, `27` unsupported provider capability, `29`
+no valid quota window, `30` invalid UTF-8 JSON, `31` non-object JSON root, and
+`32` HTML document response. The `29` classification is the existing exact
+no-valid-window message; `30` through `32` are the new parse-cause refinements.
 Malformed or structurally invalid upstream data remains `schema_drift`; a
 validated provider error kind of `parse_failed` or `unsupported` is classified
-separately. For `opencode-go`, only the two exact producer-owned parse messages
-are refined to `parse_failed_response` or `parse_failed_no_valid_quota_window`;
-unknown parse messages remain `parse_failed`. No upstream payload content or
-message text is rendered or retained. Run the offline contract tests with
+separately. For `opencode-go`, only three exact producer-owned parse messages
+are refined to `parse_failed_invalid_utf8_json`, `parse_failed_non_object_json`,
+or `parse_failed_html_document`; unknown parse messages remain `parse_failed`.
+No upstream payload content or message text is rendered or retained. Run the
+offline contract tests with
 `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python3 -m unittest tests.test_opencode_live_driver -v`.
 
 ## Manual GitHub Actions run
@@ -70,9 +73,10 @@ create or load `.env` files and does not pass `--dotenv`.
 
 The live step emits one line only: `OpenCode live result: <classification>`.
 The classifications are `success_snapshot`, `preflight`, `authentication`,
-`schema_drift`, `parse_failed`, `unsupported`, `parse_failed_response`,
-`parse_failed_no_valid_quota_window`, `rate_limited`, `source_unavailable`,
-`transport`, and `unexpected_limitora_regression`. A success means the installed CLI returned
+`schema_drift`, `parse_failed`, `unsupported`, `parse_failed_no_valid_quota_window`,
+`parse_failed_invalid_utf8_json`, `parse_failed_non_object_json`,
+`parse_failed_html_document`, `rate_limited`, `source_unavailable`, `transport`,
+and `unexpected_limitora_regression`. A success means the installed CLI returned
 the driver's validated v1 fresh OpenCode snapshot envelope. It does not persist
 provider payloads, quota values, credentials, artifacts, or a GitHub step
 summary. A success also requires non-empty structural commercial-quota window
@@ -81,8 +85,9 @@ credentials, artifacts, or a GitHub step summary. It compares only the exact
 allowlisted OpenCode parse messages after envelope validation. Missing or
 empty secrets fail preflight; missing, empty, or malformed quota windows are
 `schema_drift`; provider error kinds `parse_failed` and `unsupported` use their
-own classifications; the two known OpenCode parse causes use their refined
-constant classifications; every non-success exit code fails the workflow.
+own classifications; the existing no-valid-window message and the three new
+known OpenCode parse causes use constant classifications; every non-success
+exit code fails the workflow.
 
 The workflow declares the `opencode-live` Environment and runs only when
 `github.ref` is exactly `refs/heads/main`. GitHub applies the Environment's

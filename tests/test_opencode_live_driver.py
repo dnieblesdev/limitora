@@ -244,10 +244,13 @@ class DriverTests(unittest.TestCase):
         self.assertEqual("schema_drift", driver.CLASSIFICATIONS[21])
         self.assertEqual("parse_failed", driver.CLASSIFICATIONS[26])
         self.assertEqual("unsupported", driver.CLASSIFICATIONS[27])
-        self.assertEqual("parse_failed_response", driver.CLASSIFICATIONS[28])
         self.assertEqual("parse_failed_no_valid_quota_window", driver.CLASSIFICATIONS[29])
+        self.assertEqual("parse_failed_invalid_utf8_json", driver.CLASSIFICATIONS[30])
+        self.assertEqual("parse_failed_non_object_json", driver.CLASSIFICATIONS[31])
+        self.assertEqual("parse_failed_html_document", driver.CLASSIFICATIONS[32])
         self.assertNotEqual(driver.PARSE_FAILED, driver.UNSUPPORTED)
-        self.assertNotEqual(driver.PARSE_FAILED_RESPONSE, driver.PARSE_FAILED_NO_VALID_QUOTA_WINDOW)
+        self.assertNotEqual(driver.PARSE_FAILED_INVALID_UTF8_JSON, driver.PARSE_FAILED_NON_OBJECT_JSON)
+        self.assertNotEqual(driver.PARSE_FAILED_NON_OBJECT_JSON, driver.PARSE_FAILED_HTML_DOCUMENT)
         self.assertNotIn("workspace-marker", json.dumps(driver.CLASSIFICATIONS))
         output = io.StringIO()
         with patch.object(driver, "run", return_value=25), redirect_stdout(output):
@@ -257,9 +260,12 @@ class DriverTests(unittest.TestCase):
 
     def test_known_opencode_parse_messages_are_distinct_and_unknown_messages_stay_generic(self):
         cases = (
-            ("OpenCode Go response could not be parsed", driver.PARSE_FAILED_RESPONSE),
-            ("OpenCode Go response has no valid quota window", driver.PARSE_FAILED_NO_VALID_QUOTA_WINDOW),
+            ("OpenCode Go response is not valid UTF-8 JSON", driver.PARSE_FAILED_INVALID_UTF8_JSON),
+            ("OpenCode Go response JSON root is not an object", driver.PARSE_FAILED_NON_OBJECT_JSON),
+            ("OpenCode Go response contains an HTML document", driver.PARSE_FAILED_HTML_DOCUMENT),
             ("OpenCode Go response parse detail unavailable", driver.PARSE_FAILED),
+            ("OpenCode Go response could not be parsed", driver.PARSE_FAILED),
+            ("OpenCode Go response has no valid quota window", driver.PARSE_FAILED_NO_VALID_QUOTA_WINDOW),
             ("private payload marker", driver.PARSE_FAILED),
         )
         for safe_message, expected in cases:
@@ -269,7 +275,7 @@ class DriverTests(unittest.TestCase):
                 ))
 
     def test_known_opencode_parse_messages_require_validated_envelopes(self):
-        malformed = b'{"version":1,"error":{"kind":"parse_failed","provider_id":{"value":"opencode-go"},"safe_message":"OpenCode Go response could not be parsed","retryable":false,"extra":"ignored"}}'
+        malformed = b'{"version":1,"error":{"kind":"parse_failed","provider_id":{"value":"opencode-go"},"safe_message":"OpenCode Go response contains an HTML document","retryable":false,"extra":"ignored"}}'
         self.assertEqual(driver.SCHEMA_DRIFT, driver._classify(5, malformed))
 
     def test_specific_error_subtypes_require_exact_producer_envelopes(self):

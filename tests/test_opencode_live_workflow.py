@@ -160,8 +160,10 @@ class OpenCodeLiveWorkflowTests(unittest.TestCase):
             "authentication",
             "schema_drift",
             "parse_failed",
-            "parse_failed_response",
             "parse_failed_no_valid_quota_window",
+            "parse_failed_invalid_utf8_json",
+            "parse_failed_non_object_json",
+            "parse_failed_html_document",
             "unsupported",
             "rate_limited",
             "source_unavailable",
@@ -182,8 +184,10 @@ class OpenCodeLiveWorkflowTests(unittest.TestCase):
 
     def test_driver_parse_refinements_are_constant_and_provider_scoped(self):
         driver = (ROOT / "scripts/opencode_live_driver.py").read_text(encoding="ascii")
-        self.assertIn('28: "parse_failed_response"', driver)
         self.assertIn('29: "parse_failed_no_valid_quota_window"', driver)
+        self.assertIn('30: "parse_failed_invalid_utf8_json"', driver)
+        self.assertIn('31: "parse_failed_non_object_json"', driver)
+        self.assertIn('32: "parse_failed_html_document"', driver)
         self.assertIn("OPENCODE_PARSE_FAILURE_CODES", driver)
         self.assertIn('if kind == "parse_failed"', driver)
 

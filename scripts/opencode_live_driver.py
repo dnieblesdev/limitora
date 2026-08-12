@@ -1,7 +1,7 @@
 """Bounded, local-only OpenCode live operator boundary.
 
 Usage: python scripts/opencode_live_driver.py --confirm RUN --cli /abs/limitora
-Exit codes: 0 success, 10 preflight, 20-27 classified live failures.
+Exit codes: 0 success, 10 preflight, 20-32 classified live failures.
 """
 
 from __future__ import annotations
@@ -22,19 +22,23 @@ REQUIRED = (WORKSPACE, COOKIE)
 COMMAND_SUFFIX = ("status", "--json", "--provider", "opencode-go", "--opencode-allow-authorized-source")
 PREFLIGHT, AUTH, SCHEMA_DRIFT, RATE, SOURCE, TRANSPORT, UNEXPECTED = (10, 20, 21, 22, 23, 24, 25)
 PARSE_FAILED, UNSUPPORTED = (26, 27)
-PARSE_FAILED_RESPONSE, PARSE_FAILED_NO_VALID_QUOTA_WINDOW = (28, 29)
+PARSE_FAILED_NO_VALID_QUOTA_WINDOW = 29
+PARSE_FAILED_INVALID_UTF8_JSON, PARSE_FAILED_NON_OBJECT_JSON, PARSE_FAILED_HTML_DOCUMENT = (30, 31, 32)
 CLASSIFICATIONS = {
     0: "success_snapshot", 10: "preflight", 20: "authentication",
     21: "schema_drift", 22: "rate_limited", 23: "source_unavailable",
     24: "transport", 25: "unexpected_limitora_regression",
-    26: "parse_failed", 27: "unsupported", 28: "parse_failed_response",
-    29: "parse_failed_no_valid_quota_window",
+    26: "parse_failed", 27: "unsupported", 29: "parse_failed_no_valid_quota_window",
+    30: "parse_failed_invalid_utf8_json", 31: "parse_failed_non_object_json",
+    32: "parse_failed_html_document",
 }
 ERROR_CODES = {"unauthorized": 20, "parse_failed": 26, "unsupported": 27,
                "rate_limited": 22, "source_unavailable": 23, "transport": 24}
 OPENCODE_PARSE_FAILURE_CODES = {
-    "OpenCode Go response could not be parsed": PARSE_FAILED_RESPONSE,
     "OpenCode Go response has no valid quota window": PARSE_FAILED_NO_VALID_QUOTA_WINDOW,
+    "OpenCode Go response is not valid UTF-8 JSON": PARSE_FAILED_INVALID_UTF8_JSON,
+    "OpenCode Go response JSON root is not an object": PARSE_FAILED_NON_OBJECT_JSON,
+    "OpenCode Go response contains an HTML document": PARSE_FAILED_HTML_DOCUMENT,
 }
 ERROR_FIELDS = {"kind", "provider_id", "safe_message", "retryable"}
 MAX_RUNTIME = 15
