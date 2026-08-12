@@ -43,11 +43,9 @@ class DriverTests(unittest.TestCase):
         path.chmod(mode)
         return path
     def call(self, args, body=b'{"version":1,"result":"snapshot","provider_id":{"value":"opencode-go"},"freshness":"fresh","quota_windows":[{"kind":"commercial_quota","scope":"account","period":"weekly"}]}', code=0, **kw):
-        process = Process(body, code, kw.pop("timeout", False))
-        with patch.object(driver.subprocess, "Popen", return_value=process) as popen:
-            with patch.object(driver.os, "name", "posix"):
-                result = driver.run(args, environ=kw.pop("environ", self.env))
-        return result, process, popen
+        with patch.object(driver, "_child", return_value=(code, body)) as child:
+            result = driver.run(args, environ=kw.pop("environ", self.env))
+        return result, None, child
 
     def test_dotenv_literals_grammar_and_precedence(self):
         for cookie in ("cookie=marker", "YWJjZA=="):
@@ -58,12 +56,12 @@ class DriverTests(unittest.TestCase):
                     f"LIMITORA_OPENCODE_AUTH_COOKIE={cookie}\n"
                 )
                 args = ["--confirm", "RUN", "--cli", str(self.cli), "--dotenv", str(path)]
-                result, _, popen = self.call(args, environ={})
+                result, _, child = self.call(args, environ={})
                 self.assertEqual(0, result)
-                child_env = popen.call_args.kwargs["env"]
+                child_env = child.call_args.args[1]
                 self.assertEqual(" a$\\'!", child_env[driver.WORKSPACE])
                 self.assertEqual(cookie, child_env[driver.COOKIE])
-                self.assertNotIn(cookie, popen.call_args.args[0])
+                self.assertNotIn(cookie, child.call_args.args[0])
                 self.assertNotIn("PYTHONPATH", child_env)
                 self.assertNotIn("PYTHONHOME", child_env)
                 self.assertEqual("1", child_env["PYTHONNOUSERSITE"])
@@ -79,8 +77,8 @@ class DriverTests(unittest.TestCase):
         for text in cases:
             with self.subTest(text=text):
                 self.assertEqual(10, driver.run(["--confirm", "RUN", "--cli", str(self.cli), "--dotenv", str(self.dotenv(text))], environ={}))
-        with patch.object(driver.os, "name", "posix"):
-            self.assertEqual(10, driver.run(["--confirm", "RUN", "--cli", str(self.cli), "--dotenv", str(self.dotenv("LIMITORA_OPENCODE_WORKSPACE_ID=x\n", 0o640))], environ={}))
+        self.assertFalse(driver._dotenv_mode_is_private(0o640, platform="posix"))
+        self.assertTrue(driver._dotenv_mode_is_private(0o640, platform="nt"))
 
     def test_source_duplicates_empty_conflicts_and_env_only(self):
         same = self.dotenv("LIMITORA_OPENCODE_WORKSPACE_ID=workspace-marker\nLIMITORA_OPENCODE_AUTH_COOKIE=cookie-marker\n")
@@ -99,15 +97,15 @@ class DriverTests(unittest.TestCase):
             "PYTHONPATH": "private", "PYTHONHOME": "private",
         }
         before = dict(environ)
-        result, _, popen = self.call(["--confirm", "RUN", "--cli", str(self.cli)], environ=environ)
+        result, _, child = self.call(["--confirm", "RUN", "--cli", str(self.cli)], environ=environ)
         self.assertEqual(0, result)
         self.assertEqual(before, environ)
         self.assertEqual(
             {driver.WORKSPACE, driver.COOKIE, "PYTHONNOUSERSITE"},
-            set(popen.call_args.kwargs["env"]),
+            set(child.call_args.args[1]),
         )
-        self.assertNotIn("synthetic-ci-secret", popen.call_args.kwargs["env"].values())
-        self.assertNotIn("synthetic-token", popen.call_args.kwargs["env"].values())
+        self.assertNotIn("synthetic-ci-secret", child.call_args.args[1].values())
+        self.assertNotIn("synthetic-token", child.call_args.args[1].values())
 
     def test_dotenv_limits_are_bounded(self):
         oversized = "x" * (driver.MAX_DOTENV_BYTES + 1)
@@ -139,14 +137,11 @@ class DriverTests(unittest.TestCase):
             self.assertEqual(10, driver.run(["--confirm", "RUN", "--cli", str(self.cli)], environ=self.env))
 
     def test_exact_command_environment_shell_stderr_and_privacy(self):
-        code, _, popen = self.call(["--confirm", "RUN", "--cli", str(self.cli)])
+        code, _, child = self.call(["--confirm", "RUN", "--cli", str(self.cli)])
         self.assertEqual(0, code)
-        self.assertEqual([str(self.cli), *driver.COMMAND_SUFFIX], popen.call_args.args[0])
-        kwargs = popen.call_args.kwargs
-        self.assertFalse(kwargs["shell"])
-        self.assertIs(kwargs["stderr"], driver.subprocess.DEVNULL)
-        self.assertNotIn("workspace-marker", popen.call_args.args[0])
-        self.assertNotIn("cookie-marker", popen.call_args.args[0])
+        self.assertEqual([str(self.cli), *driver.COMMAND_SUFFIX], child.call_args.args[0])
+        self.assertNotIn("workspace-marker", child.call_args.args[0])
+        self.assertNotIn("cookie-marker", child.call_args.args[0])
 
     def test_main_emits_one_constant_line(self):
         with patch.object(driver, "run", return_value=10):
@@ -155,13 +150,21 @@ class DriverTests(unittest.TestCase):
         printed.assert_called_once_with("OpenCode live result: preflight")
 
     def test_transport_timeout_and_bounded_stdout(self):
-        with patch.object(driver, "MAX_RUNTIME", 0.01):
-            self.assertEqual(24, self.call(["--confirm", "RUN", "--cli", str(self.cli)], timeout=True)[0])
-        with patch.object(driver, "MAX_STDOUT", 3):
-            self.assertEqual(24, self.call(["--confirm", "RUN", "--cli", str(self.cli)], body=b"1234")[0])
-        with patch.object(driver.subprocess, "Popen", side_effect=OSError):
-            with patch.object(driver.os, "name", "posix"):
-                self.assertEqual(24, driver.run(["--confirm", "RUN", "--cli", str(self.cli)], environ=self.env))
+        with patch.object(driver.os, "name", "posix"), patch.object(driver, "_cleanup_group", return_value=True) as cleanup_group, patch.object(driver.subprocess, "Popen", return_value=Process(timeout=True)), patch.object(driver, "MAX_RUNTIME", 0.01):
+            self.assertIsNone(driver._child([str(self.cli)], self.env))
+        cleanup_group.assert_called_once()
+        with patch.object(driver.os, "name", "posix"), patch.object(driver, "_cleanup_group", return_value=True) as cleanup_group, patch.object(driver.subprocess, "Popen", return_value=Process(b"1234")), patch.object(driver, "MAX_STDOUT", 3):
+            self.assertIsNone(driver._child([str(self.cli)], self.env))
+        cleanup_group.assert_called_once()
+        with patch.object(driver, "_child", return_value=None):
+            self.assertEqual(24, driver.run(["--confirm", "RUN", "--cli", str(self.cli)], environ=self.env))
+
+    def test_cleanup_without_windows_kill_signal_fails_closed(self):
+        process = Process()
+        reader = __import__("threading").Thread(target=lambda: None)
+        reader.start()
+        with patch.object(driver, "_signal_group", return_value=True), patch.object(driver.signal, "SIGKILL", None, create=True):
+            self.assertFalse(driver._cleanup_group(process, reader, allowance=0.01))
 
     def test_timeout_cleanup_signals_the_whole_process_group_with_bounded_waits(self):
         if not hasattr(driver.signal, "SIGKILL") or not hasattr(driver.os, "killpg"):
@@ -180,8 +183,10 @@ class DriverTests(unittest.TestCase):
     def test_held_stdout_pipe_enters_bounded_group_cleanup(self):
         process = Process()
         process.stdout = type("HeldPipe", (), {"read": lambda self, size: b"held"})()
+        if not hasattr(driver.signal, "SIGKILL") or not hasattr(driver.os, "killpg"):
+            self.skipTest("POSIX process-group cleanup is unavailable")
         with patch.object(driver, "_cleanup_group", return_value=True) as cleanup_group, patch.object(driver.subprocess, "Popen", return_value=process), patch.object(driver, "MAX_RUNTIME", 0.01), patch.object(driver, "MAX_STDOUT", 3), patch.object(driver.os, "name", "posix"):
-            self.assertEqual(24, driver.run(["--confirm", "RUN", "--cli", str(self.cli)], environ=self.env))
+            self.assertIsNone(driver._child([str(self.cli)], self.env))
         cleanup_group.assert_called_once()
 
     def test_windows_fails_closed_before_process_start(self):

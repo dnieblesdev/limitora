@@ -19,6 +19,12 @@ LIVE_ENV = "LIMITORA_CODEX_LIVE"
 ROUTE_PORT_ENV = "LIMITORA_TEST_HTTPX_ROUTE_PORT"
 ROUTE_SCENARIO_ENV = "LIMITORA_TEST_HTTPX_SCENARIO"
 ROUTE_SCENARIOS = ("valid", "partial", "json", "html", "401", "403", "429", "5xx", "redirect", "timeout", "connection", "declared", "streamed")
+ROUTE_ERROR_KINDS = {
+    "json": "parse_failed", "html": "parse_failed", "401": "unauthorized",
+    "403": "unauthorized", "429": "rate_limited", "5xx": "source_unavailable",
+    "redirect": "unsupported", "timeout": "transport", "connection": "transport",
+    "declared": "transport", "streamed": "transport",
+}
 _SECRETS = ("workspace/raw-path-marker", "cookie/raw-header-marker", "raw-payload-marker", "proxy/raw-proxy-marker")
 
 
@@ -57,7 +63,7 @@ class RouteTransport(httpx.BaseTransport):
                 or request.headers.get_list("cookie") != ["auth=" + cookie]
                 or request.content != b""):
             raise AssertionError("HTTPX request contract failed")
-        url = request.url.copy_with(scheme="http", authority="127.0.0.1:" + str(self._port))
+        url = request.url.copy_with(scheme="http", host="127.0.0.1", port=self._port)
         rewritten = httpx.Request(request.method, url, headers=request.headers,
                                   content=request.content)
         return self._transport.handle_request(rewritten)
@@ -497,10 +503,14 @@ def opencode_smoke(require_dependency: bool, site_packages: Path, cli: Path) -> 
                     environment = os.environ.copy(); environment.update({"LIMITORA_OPENCODE_WORKSPACE_ID": workspace, "LIMITORA_OPENCODE_AUTH_COOKIE": cookie, ROUTE_PORT_ENV: str(port), ROUTE_SCENARIO_ENV: scenario, "HTTP_PROXY": "http://127.0.0.1:1/proxy/raw-proxy-marker", "HTTPS_PROXY": "http://127.0.0.1:1/proxy/raw-proxy-marker", "ALL_PROXY": "http://127.0.0.1:1/proxy/raw-proxy-marker", "http_proxy": "http://127.0.0.1:1/proxy/raw-proxy-marker", "https_proxy": "http://127.0.0.1:1/proxy/raw-proxy-marker", "all_proxy": "http://127.0.0.1:1/proxy/raw-proxy-marker"}); environment.pop("PYTHONPATH", None); environment.pop("PYTHONHOME", None); environment["PYTHONNOUSERSITE"] = "1"; route_config(environment)
                     command = [str(cli), "status", "--json", "--provider", "opencode-go", "--opencode-allow-authorized-source"]
                     completed = subprocess.run(command, cwd=Path.cwd(), env=environment, capture_output=True, text=True, check=False, timeout=15)
-                    check(completed.returncode == (0 if scenario in ("valid", "partial") else 5), "installed OpenCode scenario returned an unexpected exit")
+                    expected_exit = 0 if scenario in ("valid", "partial") else 5
+                    check(completed.returncode == expected_exit, f"scenario={scenario} exit_code={completed.returncode} expected_exit_code={expected_exit}")
                     evidence = json.loads(completed.stdout)
                     if scenario in ("valid", "partial"): check(evidence["result"] == "snapshot" and evidence["provider_id"] == {"value": "opencode-go"} and len(evidence["quota_windows"]) == (3 if scenario == "valid" else 2), "installed OpenCode snapshot evidence mismatch")
-                    else: check(evidence["result"] == "error", "installed OpenCode error envelope missing")
+                    else:
+                        check(evidence["result"] == "error", f"scenario={scenario} error_envelope_missing")
+                        error = evidence.get("error")
+                        check(isinstance(error, dict) and error.get("kind") == ROUTE_ERROR_KINDS[scenario], f"scenario={scenario} error_kind={error.get('kind') if isinstance(error, dict) else 'missing'}")
                     check(redacted(completed.stdout + completed.stderr), "installed OpenCode output leaked unsafe evidence")
                     if server is not None: check(state["requests"] == 1 and state["contract"], "loopback request contract failed")
                     receipt_path.write_text(json.dumps({"scenario": scenario, "requests": state["requests"], "contract": bool(state["contract"])}), encoding="ascii"); check(redacted(receipt_path.read_text(encoding="ascii")), "OpenCode receipt leaked unsafe evidence"); results.append(scenario)

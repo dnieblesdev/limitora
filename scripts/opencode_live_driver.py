@@ -54,10 +54,14 @@ def _regular_executable(path: str, *, dotenv: bool = False) -> None:
     except OSError:
         raise _PreflightError
     if dotenv:
-        if os.name != "nt" and mode & 0o077:
+        if not _dotenv_mode_is_private(mode):
             raise _PreflightError
     elif not os.access(path, os.X_OK):
         raise _PreflightError
+
+
+def _dotenv_mode_is_private(mode: int, *, platform: str | None = None) -> bool:
+    return (os.name if platform is None else platform) == "nt" or not mode & 0o077
 
 
 def _value(value: object) -> str:
@@ -164,7 +168,11 @@ def _cleanup_group(process, reader: threading.Thread, *, allowance: float) -> bo
         pass
     except Exception:
         failed = True
-    failed = not _signal_group(process, signal.SIGKILL) or failed
+    kill_signal = getattr(signal, "SIGKILL", None)
+    if kill_signal is None:
+        failed = True
+    else:
+        failed = not _signal_group(process, kill_signal) or failed
     try:
         process.wait(timeout=max(0.0, deadline - time.monotonic()))
     except Exception:
