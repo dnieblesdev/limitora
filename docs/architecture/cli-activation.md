@@ -25,7 +25,7 @@ argv  --parse-->  CliIntent  --intent_to_config-->  ProviderConfig
 
 | Layer | Responsibility | What it MUST NOT do |
 |-------|----------------|---------------------|
-| `limitora.cli` | Parse argv, resolve the two explicit OpenCode environment inputs, own streams and exit codes, build `CliIntent`, call `activate_provider`, route results to `render_human` / `render_json` | Import `argparse`, `subprocess`, `pathlib`, or `StatusProvider`; load `.env` files; instantiate adapters; import `_codex_jsonl` / `_opencode_go_httpx`; render or log credentials; apply cache policy; define presentation strings |
+| `limitora.cli` | Parse argv, resolve the explicit OpenCode API-key environment input, own streams and exit codes, build `CliIntent`, call `activate_provider`, route results to `render_human` / `render_json` | Import `argparse`, `subprocess`, `pathlib`, or `StatusProvider`; load `.env` files; instantiate adapters; import `_codex_jsonl` / `_opencode_go_httpx`; render or log credentials; apply cache policy; define presentation strings |
 | `limitora.composition` | Validate the closed `ProviderConfig` union, expose `activate_provider`, lazily import private adapter modules | Be called with a `cache_policy`; pre-import `httpx` |
 | `limitora.output` | Project typed results into deterministic strings (human or JSON v1) | Import `limitora.cli`; leak credentials, tracebacks, or `__cause__` |
 
@@ -57,9 +57,7 @@ limitora status [--help] [--json] [--provider {codex,opencode-go}] [flags]
 
 | OpenCode Go flags | Description |
 |-------------------|-------------|
-| `--workspace-id ID` | Required. Non-empty stripped id. |
-| `--auth-cookie COOKIE` | Required. Non-empty cookie value. |
-| `--endpoint URL` | Default `https://opencode.ai`. Must match exactly. |
+| `--api-key KEY` | Required. Non-empty stripped API key. |
 | `--timeout SECONDS` | Default 10. Positive integer ≤ 10. |
 | `--opencode-allow-authorized-source` | Opt in to `ALLOW_AUTHORIZED_SOURCE`. Default is `DENY_AUTHORIZED_SOURCE`. |
 
@@ -68,16 +66,15 @@ environment variables:
 
 | Environment variable | Replaces | Rule |
 |----------------------|----------|------|
-| `LIMITORA_OPENCODE_WORKSPACE_ID` | `--workspace-id` | Exactly one source; present values must not be empty or whitespace-only. |
-| `LIMITORA_OPENCODE_AUTH_COOKIE` | `--auth-cookie` | Exactly one source; present values must not be empty or whitespace-only. |
+| `LIMITORA_OPENCODE_API_KEY` | `--api-key` | Exactly one source; present values must not be empty or whitespace-only. |
 
 The CLI accepts an injectable environment mapping for deterministic callers and
 tests and never mutates the process environment. A flag and its corresponding
 environment variable together are a usage error; values are never included in
 usage errors, help, representations, or output. Production and core code do
 not load `.env` files. The separate local `scripts/opencode_live_driver.py`
-operator boundary may load a path supplied explicitly with `--dotenv`; CI does
-not enable this local driver.
+operator boundary reads its API key from the process environment; CI maps it only
+on the protected live step.
 
 Unknown flags, missing values, duplicate single-cardinality flags,
 unexpected positionals, and cross-provider flags all return exit 2 with a
@@ -182,11 +179,11 @@ candidate must be a host-native absolute regular executable. Production code
 does not discover Codex binaries and no workflow enables this path.
 
 When the optional OpenCode Go extra is installed, the harness invokes the
-installed `limitora` console child with environment-backed synthetic workspace
-and cookie values. A temporary `sitecustomize.py` is created only in that
+installed `limitora` console child with an environment-backed synthetic API key.
+A temporary `sitecustomize.py` is created only in that
 isolated environment and only when no collision is present. It replaces the
 child's public `httpx.Client` with a public `BaseTransport` route that accepts
-only the exact `https://opencode.ai` GET, preserves Host/Cookie and no body,
+only the exact `https://opencode.ai` GET, preserves Host and no body,
 and rewrites a transport copy to an ephemeral IPv4 loopback server. The server
 has bounded shutdown, disabled request logging, proxy-poison environment
 coverage, and structural scenario receipts only. The shim is removed only when
@@ -194,9 +191,9 @@ its bytes still exactly match the content it created; it is never distributed
 or used by normal installs.
 
 At the private Codex spawn boundary, the child receives a copied environment
-with `LIMITORA_OPENCODE_WORKSPACE_ID` and `LIMITORA_OPENCODE_AUTH_COOKIE`
-removed case-insensitively. Unrelated variables and process I/O semantics are
-preserved, and the parent `os.environ` is never mutated.
+with OpenCode credential names removed case-insensitively. Unrelated variables
+and process I/O semantics are preserved, and the parent `os.environ` is never
+mutated.
 
 ## Privacy guarantees
 
@@ -205,17 +202,17 @@ preserved, and the parent `os.environ` is never mutated.
 | CLI source contains no `argparse`, `subprocess`, `pathlib`, `StatusProvider`, `dotenv`, or `.env` substring | `tests/test_cli.py::PrivacyContractTests::test_cli_source_excludes_privacy_forbidden_symbols` |
 | Captured output (stdout ∪ stderr) contains no `secret`, `__cause__`, `Traceback`, or `auth=` substring for any argv shape | `tests/test_cli.py::PrivacyContractTests` |
 | JSON `error` envelope carries only `kind`, `provider_id`, `safe_message`, `retryable` | `tests/test_output.py::ErrorSanitizationTests` and `tests/test_cli.py::JsonRoutingTests` |
-| Auth cookie never appears in any captured stream for the OpenCode Go path (default DENY, ALLOW, and `--json`) | `tests/test_cli.py::PrivacyContractTests` |
+| API key never appears in any captured stream for the OpenCode Go path (default DENY, ALLOW, and `--json`) | `tests/test_cli.py::PrivacyContractTests` |
 | Composition `safe_message` is a redacted constant; credentials and provider payloads are never echoed | `tests/test_provider_composition.py::test_errors_are_constant_and_redacted` |
-| Config and intent representations omit `workspace_id` and `auth_cookie`; HTTP request representations omit URL, headers, and body | `tests/test_public_library_api.py`, `tests/test_cli.py`, and `tests/test_opencode_go_httpx.py` |
+| Config and intent representations omit `api_key`; HTTP request representations omit URL, headers, and body | `tests/test_public_library_api.py`, `tests/test_cli.py`, and `tests/test_opencode_go_httpx.py` |
 
 The CLI is the only module that touches argv. The `intent_to_config`
 mapper is a pure data function: no I/O, no logging, no printing.
 The CLI owns only the named OpenCode environment lookup and passes resolved
 credentials explicitly; the core library and providers perform no environment
-lookup. Cookies and runners reach the transport only through the private
-adapter modules, which place them in `Cookie:` request headers or subprocess
-argv, never in user-visible output.
+lookup. The API key reaches the transport only through the private adapter
+module, where it becomes a Bearer header and never appears in user-visible
+output. Runners remain private to the Codex adapter and subprocess argv.
 
 ## Authorization policy
 
@@ -224,7 +221,7 @@ argv, never in user-visible output.
 | Codex | `DENY_AUTHORIZED_SOURCE` | `--codex-allow-authorized-source` |
 | OpenCode Go | `DENY_AUTHORIZED_SOURCE` | `--opencode-allow-authorized-source` |
 
-A user that supplies `--auth-cookie` but forgets the corresponding
+A user that supplies `--api-key` but forgets the corresponding
 `--allow-authorized-source` opt-in sees a `KIND: unauthorized` error
 (redacted). There is no implicit allow based on credential presence.
 
@@ -237,7 +234,7 @@ A user that supplies `--auth-cookie` but forgets the corresponding
 | Composition (unit) | `tests/test_provider_composition.py::ActivateProviderTests` | `activate_provider` constructs the right dependency factory for each provider; no I/O at construction; injected clock; default `CurrentClock`; httpx not pre-imported; sole-importer contract; third config → `INVALID` |
 | CLI integration | `tests/test_cli.py::CodexActivationTests`, `JsonRoutingTests`, `HelpAndUnconfiguredTests`, `RendererRegressionTests` | Codex happy path; authz default+opt-in; `--json` ok / stale / undetected / error envelope; `--help` precedence over `--json`; unconfigured preserved byte-for-byte |
 | OpenCode end-to-end | `tests/test_opencode_go_composition.py::OpenCodeGoCompositionTests` | argv → `activate_provider` → `read_status` → stdout JSON; human mode; default DENY produces UNAUTHORIZED before transport |
-| Privacy (contract) | `tests/test_cli.py::PrivacyContractTests`, `tests/test_provider_composition.py::ProviderCompositionTests::test_errors_are_constant_and_redacted` | Source scan; stream scan; redacted messages; auth-cookie-never-leaks across all argv shapes |
+| Privacy (contract) | `tests/test_cli.py::PrivacyContractTests`, `tests/test_provider_composition.py::ProviderCompositionTests::test_errors_are_constant_and_redacted` | Source scan; stream scan; redacted messages; API-key-never-leaks across all argv shapes |
 
 ## Issue #18 work units
 
@@ -254,7 +251,7 @@ evidence here.
 
 - `--json-pretty` formatting knob.
 - Cache policy CLI flag (library-only).
-- Arbitrary environment or config-file discovery; only the two named OpenCode
-  variables are supported, and `.env` loading is not part of Limitora.
+- Arbitrary environment or config-file discovery; only the named OpenCode API-key
+  variable is supported, and `.env` loading is not part of Limitora.
 - `argparse` migration.
 - Additional providers beyond Codex and OpenCode Go.

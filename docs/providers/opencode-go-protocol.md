@@ -1,41 +1,41 @@
 # OpenCode Go provider protocol and risk boundary
 
 This page documents the current private adapter boundary from repository source
-and tests. It is not a claim that OpenCode Go publishes or guarantees this
-account-usage response schema. The canonical public context is
+and tests. The supported API contract is corroborated by the official OpenCode
+handler and product documentation. The canonical public context is
 [OpenCode Go documentation](https://opencode.ai/docs/go/), accessed 2026-07-14;
 the public [OpenCode repository](https://github.com/anomalyco/opencode) is
-additional product context, not a private dashboard payload.
+additional product context, not a private account payload.
 
 ## Scope and authorization
 
 | Boundary | Current behavior |
 |---|---|
 | Product identity | OpenCode Go is treated as a commercial quota source, distinct from the Go language and from upstream model providers. |
-| Activation | The provider is opt-in and requires a workspace identifier, an endpoint fixed to `https://opencode.ai`, a positive timeout no greater than 10 seconds, and user-supplied authorization. |
+| Activation | The provider is opt-in and requires one opaque API key, a positive timeout no greater than 10 seconds, and user-supplied authorization. |
 | Default policy | `DENY_AUTHORIZED_SOURCE` fails before transport; the adapter does not discover local credentials or silently authorize a request. |
 | Transport | The optional `httpx` dependency is scoped to the `opencode-go` extra; redirects and ambient proxy/environment configuration are disabled. The configured timeout applies to HTTPX connect, read, write, and pool operations and to a Limitora-owned monotonic total budget. |
 
 ## Request and observed response shape
 
-The bounded transport issues one `GET` request to the encoded workspace path:
+The bounded transport issues one fixed-origin `GET` request:
 
 ```text
-https://opencode.ai/workspace/<encoded-workspace-id>/go
+https://opencode.ai/zen/go/v1/usage
 ```
 
-The authorization header is constructed inside the transport and is never part
-of documentation examples, diagnostics, or output. The current mapping accepts
-only an object containing one or more of these synthetic-shape fields:
+The transport constructs `Authorization: Bearer <key>` internally. The key is
+never part of documentation examples, diagnostics, or output. The response is
+an object containing a `usage` object with one or more of these fields:
 
 | Field | Meaning in the adapter | Boundary |
 |---|---|---|
-| `rollingUsage` | Five-hour commercial quota window | `usagePercent` is a finite `int` or `float` from 0..100; `resetInSec` is an integral non-negative value |
-| `weeklyUsage` | Weekly commercial quota window | Same validation |
-| `monthlyUsage` | Monthly commercial quota window | Same validation |
+| `usage.rolling` | Five-hour commercial quota window | `status` is `ok` or `rate-limited`; `percent` is a finite `int` or `float` from 0..100; `resetsAt` is timezone-aware ISO-8601 |
+| `usage.weekly` | Weekly commercial quota window | Same validation |
+| `usage.monthly` | Monthly commercial quota window | Same validation |
 
 Each valid field becomes used and remaining percentage points with a reset
-timestamp derived from one captured `fetched_at`. The adapter does not infer a
+timestamp supplied by the API. The adapter does not infer a
 plan identifier. Fixture values are synthetic shape evidence only; they are not
 provider observations or account data.
 
@@ -51,13 +51,13 @@ label, upstream provider limit, or HTTP status does not create a quota value.
 | 5xx | Typed source-unavailable failure; retryable |
 | HTTP transport timeout or unavailability | Typed `TRANSPORT` failure; retryable where the contract permits |
 | Redirect or other non-2xx response | Typed unsupported failure; no redirect following |
-| HTML login page, invalid UTF-8 or JSON, non-object JSON root, invalid field, or no valid window | Typed parse failure; the provider uses constant cause messages and partial data is retained only when at least one sibling window is valid |
+| Invalid UTF-8 or JSON, non-object JSON root, missing `usage`, invalid field, or no valid window | Typed parse failure; the provider uses constant cause messages and partial data is retained only when at least one sibling window is valid |
 | Response body at or above 512 KiB or configured request budget exhausted | Bounded transport failure; no further response chunks are processed |
 
 An absent, null, malformed, or unsupported window is not converted to zero.
 If every candidate window is invalid, the provider fails closed rather than
 returning fabricated quota data. Error messages are constant safe summaries;
-credentials, cookies, private response bodies, tracebacks, and raw transport
+credentials, private response bodies, tracebacks, and raw transport
 diagnostics are excluded.
 
 HTTPX synchronous timeouts are per-operation inactivity limits, not a strict

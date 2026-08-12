@@ -28,7 +28,7 @@ Limitora is a plain Python library that reads provider status through explicit c
 
 The stable public API is rooted in `limitora` and includes `StatusClient`, `StatusRequest`, freshness types, provider-neutral models, safe provider errors, and the closed construction contract (`CodexJsonlConfig`, `OpenCodeGoConfig`, `ProviderConfig`, `activate_provider`, `CompositionError`, and `CompositionErrorKind`). Dependency types, provider modules, adapters, and transports remain internal.
 
-Importing `limitora` does not load provider implementations, `subprocess`, or the optional `httpx` dependency. `activate_provider` loads only the selected implementation and returns one reusable client; it does not aggregate providers. OpenCode Go's `workspace_id` and `auth_cookie` are sensitive in-memory inputs and are excluded from Limitora-controlled representations.
+Importing `limitora` does not load provider implementations, `subprocess`, or the optional `httpx` dependency. `activate_provider` loads only the selected implementation and returns one reusable client; it does not aggregate providers. OpenCode Go's API key is a sensitive in-memory input and is excluded from Limitora-controlled representations.
 
 ## MVP constraints
 

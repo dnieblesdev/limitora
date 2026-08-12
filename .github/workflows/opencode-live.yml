@@ -187,8 +187,7 @@ jobs:
       - name: Run OpenCode live driver
         shell: bash
         env:
-          LIMITORA_OPENCODE_WORKSPACE_ID: ${{ secrets.LIMITORA_OPENCODE_WORKSPACE_ID }}
-          LIMITORA_OPENCODE_AUTH_COOKIE: ${{ secrets.LIMITORA_OPENCODE_AUTH_COOKIE }}
+          LIMITORA_OPENCODE_API_KEY: ${{ secrets.LIMITORA_OPENCODE_API_KEY }}
         run: |
           set -euo pipefail
           unset PYTHONPATH PYTHONHOME

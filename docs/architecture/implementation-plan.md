@@ -53,14 +53,9 @@
 - **Acceptance criterion:** The strategy either returns evidence-backed typed data or explicitly degrades; it never conflates technical limits with commercial Codex quota.
 - **Risks:** The source may change without notice and authorization behavior may be fragile; unknown values must not be inferred.
 
-### 6. OpenCode Go provider
+### 6. OpenCode Go provider (historical pre-API-key design)
 
-- **Purpose/description:** Define an independent opt-in authenticated-session or dashboard adapter for OpenCode Go as a fragile, local-reverse-engineered integration.
-- **Points to address:** Require defensive parsing, response-size limits, explicit incompatible-response degradation, and strict non-exposure and non-persistence of secrets, cookies, and headers.
-- **Out of scope:** Default enablement, credential or session discovery, cookie/session persistence, upstream attribution, polling, application composition, UI, and implementation authorization.
-- **Tests:** Mandatory: use offline redacted fixtures for unavailable, unauthorized, expired-session, malformed, oversized, incompatible, timeout, and partial outcomes; prove session material never enters typed results, errors, JSON, or logs.
-- **Acceptance criterion:** An incompatible or unauthorized response yields a sanitized explicit degradation and never fabricated account data.
-- **Risks:** Dashboard and session behavior are non-public, undocumented, reverse-engineered, privacy-sensitive, and likely to break.
+- **Historical note:** This design was superseded by the supported OpenCode Go usage API. It is retained only to explain the original research boundary and is not an implementation instruction.
 
 ### 7. Application composition and provider activation
 

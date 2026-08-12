@@ -115,7 +115,7 @@ def _require_identity(value: str, name: str) -> None:
         raise ValueError(f"{name} must be a non-empty trimmed string")
 
 
-_PLANLESS_COMMERCIAL_SOURCE = "opencode-go-dashboard"
+_PLANLESS_COMMERCIAL_SOURCE = "opencode-go-api"
 
 
 @dataclass(frozen=True)

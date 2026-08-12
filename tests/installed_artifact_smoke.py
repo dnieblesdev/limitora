@@ -9,23 +9,22 @@ from enum import Enum
 import importlib.metadata as metadata
 from pathlib import Path
 from typing import Callable, Mapping
-from urllib.parse import quote
 
 from limitora._runner_path import _is_native_absolute_runner_path
 
 
-HELP = "limitora status [--help] [--json] [--provider {codex,opencode-go}] [flags]\n  codex:        --runner PATH [--runner ARG ...]\n                A single absolute PATH uses 'app-server --stdio'.\n                [--codex-allow-authorized-source]\n  opencode-go:  --workspace-id ID --auth-cookie COOKIE\n                [--endpoint URL] [--timeout SECONDS]\n                [--opencode-allow-authorized-source]\n                or LIMITORA_OPENCODE_WORKSPACE_ID /\n                LIMITORA_OPENCODE_AUTH_COOKIE\nWithout --provider, status prints 'no provider configured' to stderr (exit 4).\n"
+HELP = "limitora status [--help] [--json] [--provider {codex,opencode-go}] [flags]\n  codex:        --runner PATH [--runner ARG ...]\n                A single absolute PATH uses 'app-server --stdio'.\n                [--codex-allow-authorized-source]\n  opencode-go:  --api-key KEY [--timeout SECONDS]\n                [--opencode-allow-authorized-source]\n                or LIMITORA_OPENCODE_API_KEY\nWithout --provider, status prints 'no provider configured' to stderr (exit 4).\n"
 LIVE_ENV = "LIMITORA_CODEX_LIVE"
 ROUTE_PORT_ENV = "LIMITORA_TEST_HTTPX_ROUTE_PORT"
 ROUTE_SCENARIO_ENV = "LIMITORA_TEST_HTTPX_SCENARIO"
-ROUTE_SCENARIOS = ("valid", "partial", "json", "html", "401", "403", "429", "5xx", "redirect", "timeout", "connection", "declared", "streamed")
+ROUTE_SCENARIOS = ("valid", "partial", "window", "json", "html", "401", "403", "429", "5xx", "redirect", "timeout", "connection", "declared", "streamed")
 ROUTE_ERROR_KINDS = {
-    "json": "parse_failed", "html": "parse_failed", "401": "unauthorized",
+    "window": "parse_failed", "json": "parse_failed", "html": "parse_failed", "401": "unauthorized",
     "403": "unauthorized", "429": "rate_limited", "5xx": "source_unavailable",
     "redirect": "unsupported", "timeout": "transport", "connection": "transport",
     "declared": "transport", "streamed": "transport",
 }
-_SECRETS = ("workspace/raw-path-marker", "cookie/raw-header-marker", "raw-payload-marker", "proxy/raw-proxy-marker")
+_SECRETS = ("api-key/raw-header-marker", "raw-payload-marker", "proxy/raw-proxy-marker")
 
 
 def route_config(environ: Mapping[str, str]) -> tuple[int, str]:
@@ -47,7 +46,6 @@ def sitecustomize_collision(path: Path) -> bool:
 
 
 ROUTE_SHIM = r'''import os
-from urllib.parse import quote
 import httpx
 
 class RouteTransport(httpx.BaseTransport):
@@ -55,12 +53,13 @@ class RouteTransport(httpx.BaseTransport):
         self._transport = httpx.HTTPTransport()
         self._port = int(port)
     def handle_request(self, request):
-        workspace = os.environ.get("LIMITORA_OPENCODE_WORKSPACE_ID", "")
-        cookie = os.environ.get("LIMITORA_OPENCODE_AUTH_COOKIE", "")
-        expected = "https://opencode.ai/workspace/" + quote(workspace, safe="") + "/go"
+        api_key = os.environ.get("LIMITORA_OPENCODE_API_KEY", "")
+        expected = "https://opencode.ai/zen/go/v1/usage"
         if (request.method != "GET" or str(request.url) != expected
                 or request.headers.get_list("host") != ["opencode.ai"]
-                or request.headers.get_list("cookie") != ["auth=" + cookie]
+                or request.headers.get_list("authorization") != ["Bearer " + api_key]
+                or request.headers.get_list("cookie") != []
+                or request.headers.get_list("origin") != []
                 or request.content != b""):
             raise AssertionError("HTTPX request contract failed")
         url = request.url.copy_with(scheme="http", host="127.0.0.1", port=self._port)
@@ -268,7 +267,7 @@ def api_smoke() -> None:
 
     result = limitora.StatusClient(OfflineProvider(), limitora.CurrentClock()).read_status(request); check(isinstance(result, limitora.StatusUndetectedResult), "public StatusClient flow failed")
     runner = str(Path.cwd() / "not-a-real-codex-runner"); check(isinstance(limitora.activate_provider(limitora.CodexJsonlConfig((runner,))), limitora.StatusClient), "Codex public construction failed")
-    check(isinstance(limitora.activate_provider(limitora.OpenCodeGoConfig("workspace", "cookie")), limitora.StatusClient), "OpenCode Go public construction failed")
+    check(isinstance(limitora.activate_provider(limitora.OpenCodeGoConfig("api-key")), limitora.StatusClient), "OpenCode Go public construction failed")
 
 
 def cli_smoke(cli: Path) -> None:
@@ -291,7 +290,7 @@ client_info_present = False
 receipt_path = os.environ.get("LIMITORA_CODEX_RECEIPT")
 if receipt_path is None:
     raise SystemExit("fixture receipt is not configured")
-private_names = {"limitora_opencode_workspace_id", "limitora_opencode_auth_cookie"}
+private_names = {"limitora_opencode_api_key"}
 if any(name.casefold() in private_names for name in os.environ):
     raise SystemExit("fixture received a private environment value")
 for expected in ("initialize", "initialized", "account/rateLimits/read"):
@@ -330,8 +329,7 @@ def codex_smoke(cli: Path) -> None:
         root = Path(directory); fixture = root / "fake-codex.py"; receipt = root / "receipt.json"
         fixture.write_text(CODEX_FIXTURE, encoding="ascii")
         environment = os.environ.copy(); environment["LIMITORA_CODEX_RECEIPT"] = str(receipt)
-        environment["LIMITORA_OPENCODE_WORKSPACE_ID"] = "synthetic-workspace-secret"
-        environment["lImItOrA_oPeNcOdE_aUtH_cOoKiE"] = "synthetic-auth-cookie"
+        environment["LIMITORA_OPENCODE_API_KEY"] = "api-key/raw-header-marker"
         command = [str(cli), "status", "--provider", "codex", "--runner", str(sys.executable), "--runner", str(fixture), "--codex-allow-authorized-source"]
         for arguments, expected_json in ((command, False), (command[:2] + ["--json"] + command[2:], True)):
             if receipt.exists(): receipt.unlink()
@@ -340,7 +338,7 @@ def codex_smoke(cli: Path) -> None:
             check(time.monotonic() - started < 10, "Codex child cleanup exceeded the smoke bound")
             check(completed.returncode == 0, "installed Codex CLI failed")
             output = completed.stdout + completed.stderr
-            for marker in ("rateLimits", "limitId", "Traceback", "auth", "synthetic-workspace-secret", "synthetic-auth-cookie"):
+            for marker in ("rateLimits", "limitId", "Traceback", "auth", "api-key/raw-header-marker"):
                 check(marker.casefold() not in output.casefold(), "installed Codex output leaked unsafe evidence")
             receipt_data = json.loads(receipt.read_text(encoding="ascii"))
             check(receipt_data["methods"] == ["initialize", "initialized", "account/rateLimits/read"], "Codex fixture order mismatch")
@@ -374,95 +372,13 @@ def live_smoke(cli: Path, environ: Mapping[str, str]) -> str:
     return outcome.kind.value
 
 
-def legacy_opencode_smoke(require_dependency: bool, site_packages: Path) -> None:
-    import limitora
-    from limitora.providers import AuthorizationPolicy, ProviderError, ProviderErrorKind
-    from limitora.providers._opencode_go_httpx import _HttpxOpenCodeGoTransport
-
-    if require_dependency:
-        import httpx
-        check(under(Path(httpx.__file__), site_packages), "imported httpx is outside site-packages")
-        check(metadata.version("httpx") == httpx.__version__, "imported httpx version metadata mismatch")
-    else:
-        check(importlib.util.find_spec("httpx") is None, "base installation unexpectedly contains httpx")
-
-    client = limitora.activate_provider(limitora.OpenCodeGoConfig("space/id", "synthetic-cookie"))
-    transport = client._service._provider._transport
-    check(isinstance(transport, _HttpxOpenCodeGoTransport), "production OpenCode Go transport was bypassed")
-    request = limitora.StatusRequest(
-        frozenset({limitora.MetricKind.COMMERCIAL_QUOTA}), AuthorizationPolicy.DENY_AUTHORIZED_SOURCE,
-        limitora.FreshnessPolicy(timedelta(minutes=5)),
-    )
-    try:
-        client.read_status(request)
-    except ProviderError as error:
-        check(error.kind is ProviderErrorKind.UNAUTHORIZED, "OpenCode Go deny path changed")
-    else:
-        raise AssertionError("OpenCode Go deny path did not fail")
-    if not require_dependency:
-        return
-
-    body = b'{"rollingUsage":{"usagePercent":25,"resetInSec":10},"weeklyUsage":{"usagePercent":50,"resetInSec":20},"monthlyUsage":{"usagePercent":75,"resetInSec":30}}'
-    clients = []
-
-    class Response:
-        status_code = 200
-
-        def __init__(self):
-            self.headers = {"content-length": str(len(body)), "content-type": "application/json"}
-
-        def __enter__(self): return self
-        def __exit__(self, *args): return False
-        def iter_bytes(self):
-            yield body[:len(body) // 2]
-            yield body[len(body) // 2:]
-
-    class Client:
-        def __init__(self, **options):
-            check(options["follow_redirects"] is False and options["trust_env"] is False, "HTTPX client is not hermetic")
-            clients.append(self)
-
-        def __enter__(self): return self
-        def __exit__(self, *args): return False
-
-        def stream(self, method, url, **kwargs):
-            check((method, url, kwargs) == ("GET", "https://opencode.ai/workspace/space%2Fid/go", {"headers": {"Cookie": "auth=synthetic-cookie"}, "content": None}), "unexpected OpenCode Go request URL/headers/body")
-            return Response()
-
-    def blocked(*args, **kwargs):
-        raise AssertionError("network access is forbidden")
-
-    class BlockedSocket:
-        def __init__(self, *args, **kwargs): blocked(*args, **kwargs)
-        def connect(self, *args, **kwargs): blocked(*args, **kwargs)
-        def connect_ex(self, *args, **kwargs): blocked(*args, **kwargs)
-
-    import httpx
-    originals = httpx.Client, socket.getaddrinfo, socket.socket, socket.create_connection
-    httpx.Client, socket.getaddrinfo, socket.socket, socket.create_connection = Client, blocked, BlockedSocket, blocked
-    try:
-        request = limitora.StatusRequest(frozenset({limitora.MetricKind.COMMERCIAL_QUOTA}), AuthorizationPolicy.ALLOW_AUTHORIZED_SOURCE, limitora.FreshnessPolicy(timedelta(minutes=5)))
-        result = client.read_status(request)
-        check(isinstance(result, limitora.StatusSnapshotResult) and result.snapshot.status.state.value == "available",
-              "OpenCode Go productive response mapping failed")
-        check(tuple(window.period for window in result.snapshot.quota_windows) == ("five_hour", "weekly", "monthly"),
-              "OpenCode Go quota mapping failed")
-        check(len(clients) == 1, "_HttpxOpenCodeGoTransport was not invoked")
-        for attempt in (lambda: socket.getaddrinfo("opencode.ai", 443), lambda: socket.create_connection(("opencode.ai", 443)), lambda: socket.socket(), lambda: BlockedSocket.connect(None, ("opencode.ai", 443)), lambda: BlockedSocket.connect_ex(None, ("opencode.ai", 443))):
-            try: attempt()
-            except AssertionError: pass
-            else: raise AssertionError("network guard did not raise")
-    finally:
-        httpx.Client, socket.getaddrinfo, socket.socket, socket.create_connection = originals
-
-
 def opencode_smoke(require_dependency: bool, site_packages: Path, cli: Path) -> tuple[str, ...]:
     import limitora
     from limitora.providers import AuthorizationPolicy, ProviderError, ProviderErrorKind
     from limitora.providers._opencode_go_httpx import _HttpxOpenCodeGoTransport
     if not require_dependency:
         check(importlib.util.find_spec("httpx") is None, "base installation unexpectedly contains httpx")
-        client = limitora.activate_provider(limitora.OpenCodeGoConfig("space/id", "synthetic-cookie"))
+        client = limitora.activate_provider(limitora.OpenCodeGoConfig("api-key/raw-header-marker"))
         check(isinstance(client._service._provider._transport, _HttpxOpenCodeGoTransport), "production OpenCode Go transport was bypassed")
         request = limitora.StatusRequest(frozenset({limitora.MetricKind.COMMERCIAL_QUOTA}), AuthorizationPolicy.DENY_AUTHORIZED_SOURCE, limitora.FreshnessPolicy(timedelta(minutes=5)))
         try: client.read_status(request)
@@ -473,26 +389,26 @@ def opencode_smoke(require_dependency: bool, site_packages: Path, cli: Path) -> 
     check(under(Path(httpx.__file__), site_packages), "imported httpx is outside site-packages")
     check(metadata.version("httpx") == httpx.__version__, "installed httpx version metadata mismatch")
     owned_path, owned = install_sitecustomize(site_packages)
-    workspace, cookie = _SECRETS[:2]; payload = b'{"rollingUsage":{"usagePercent":25,"resetInSec":10},"weeklyUsage":{"usagePercent":50,"resetInSec":20},"monthlyUsage":{"usagePercent":75,"resetInSec":30}}'; results = []
+    api_key, payload = _SECRETS[:2]; payload = b'{"usage":{"rolling":{"status":"ok","percent":25,"resetsAt":"2026-07-18T12:00:10Z"},"weekly":{"status":"ok","percent":50,"resetsAt":"2026-07-18T12:00:20Z"},"monthly":{"status":"ok","percent":75,"resetsAt":"2026-07-18T12:00:30Z"}}}'; results = []
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     try:
         with tempfile.TemporaryDirectory(prefix="limitora-opencode-smoke-") as directory:
             receipt_path = Path(directory) / "receipt.json"
             for scenario in ROUTE_SCENARIOS:
-                state = {"requests": 0, "contract": True}; expected_path = "/workspace/" + quote(workspace, safe="") + "/go"
+                state = {"requests": 0, "contract": True}; expected_path = "/zen/go/v1/usage"
                 class Handler(BaseHTTPRequestHandler):
                     protocol_version = "HTTP/1.0"
                     def log_message(self, *args): pass
                     def do_GET(self):
                         state["requests"] += 1; length = self.headers.get("Content-Length")
                         if length and length.isdigit() and int(length): self.rfile.read(int(length)); state["contract"] = False
-                        state["contract"] &= (self.path == expected_path and self.headers.get_all("Host") == ["opencode.ai"] and self.headers.get_all("Cookie") == ["auth=" + cookie] and length in (None, "0"))
+                        state["contract"] &= (self.path == expected_path and self.headers.get_all("Host") == ["opencode.ai"] and self.headers.get_all("Authorization") == ["Bearer " + api_key] and self.headers.get_all("Cookie") is None and self.headers.get_all("Origin") is None and length in (None, "0"))
                         if scenario == "timeout": time.sleep(12); return
                         if scenario == "redirect": self.send_response(302); self.send_header("Location", "https://opencode.ai/login"); self.end_headers(); return
                         if scenario == "declared": self.send_response(200); self.send_header("Content-Length", str(512 * 1024 + 1)); self.end_headers(); return
                         if scenario == "streamed": self.send_response(200); self.end_headers(); self.wfile.write(b"x" * (512 * 1024 + 1)); self.wfile.flush(); return
                         status = int(scenario) if scenario in ("401", "403", "429") else 503 if scenario == "5xx" else 200
-                        body = payload if scenario == "valid" else payload.replace(b'"weeklyUsage":{"usagePercent":50,"resetInSec":20}', b'"weeklyUsage":{"usagePercent":"bad","resetInSec":20}') if scenario == "partial" else b"{raw-payload-marker" if scenario == "json" else b"<html>raw-payload-marker login</html>" if scenario == "html" else b"raw-payload-marker"
+                        body = payload if scenario == "valid" else payload.replace(b'"weekly":{"status":"ok","percent":50,"resetsAt":"2026-07-18T12:00:20Z"}', b'"weekly":{"status":"bad","percent":50,"resetsAt":"2026-07-18T12:00:20Z"}') if scenario == "partial" else payload.replace(b'"rolling":{"status":"ok"', b'"rolling":{"status":"bad"').replace(b'"weekly":{"status":"ok"', b'"weekly":{"status":"bad"').replace(b'"monthly":{"status":"ok"', b'"monthly":{"status":"bad"') if scenario == "window" else b"{raw-payload-marker" if scenario == "json" else b"<html>raw-payload-marker login</html>" if scenario == "html" else b"raw-payload-marker"
                         self.send_response(status); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
                 server = thread = None
                 try:
@@ -500,13 +416,17 @@ def opencode_smoke(require_dependency: bool, site_packages: Path, cli: Path) -> 
                         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler); server.daemon_threads = True; thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start(); port = server.server_address[1]
                     else:
                         probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM); probe.bind(("127.0.0.1", 0)); port = probe.getsockname()[1]; probe.close()
-                    environment = os.environ.copy(); environment.update({"LIMITORA_OPENCODE_WORKSPACE_ID": workspace, "LIMITORA_OPENCODE_AUTH_COOKIE": cookie, ROUTE_PORT_ENV: str(port), ROUTE_SCENARIO_ENV: scenario, "HTTP_PROXY": "http://127.0.0.1:1/proxy/raw-proxy-marker", "HTTPS_PROXY": "http://127.0.0.1:1/proxy/raw-proxy-marker", "ALL_PROXY": "http://127.0.0.1:1/proxy/raw-proxy-marker", "http_proxy": "http://127.0.0.1:1/proxy/raw-proxy-marker", "https_proxy": "http://127.0.0.1:1/proxy/raw-proxy-marker", "all_proxy": "http://127.0.0.1:1/proxy/raw-proxy-marker"}); environment.pop("PYTHONPATH", None); environment.pop("PYTHONHOME", None); environment["PYTHONNOUSERSITE"] = "1"; route_config(environment)
+                    environment = os.environ.copy(); environment.update({"LIMITORA_OPENCODE_API_KEY": api_key, ROUTE_PORT_ENV: str(port), ROUTE_SCENARIO_ENV: scenario, "HTTP_PROXY": "http://127.0.0.1:1/proxy/raw-proxy-marker", "HTTPS_PROXY": "http://127.0.0.1:1/proxy/raw-proxy-marker", "ALL_PROXY": "http://127.0.0.1:1/proxy/raw-proxy-marker", "http_proxy": "http://127.0.0.1:1/proxy/raw-proxy-marker", "https_proxy": "http://127.0.0.1:1/proxy/raw-proxy-marker", "all_proxy": "http://127.0.0.1:1/proxy/raw-proxy-marker"}); environment.pop("PYTHONPATH", None); environment.pop("PYTHONHOME", None); environment["PYTHONNOUSERSITE"] = "1"; route_config(environment)
                     command = [str(cli), "status", "--json", "--provider", "opencode-go", "--opencode-allow-authorized-source"]
                     completed = subprocess.run(command, cwd=Path.cwd(), env=environment, capture_output=True, text=True, check=False, timeout=15)
                     expected_exit = 0 if scenario in ("valid", "partial") else 5
                     check(completed.returncode == expected_exit, f"scenario={scenario} exit_code={completed.returncode} expected_exit_code={expected_exit}")
                     evidence = json.loads(completed.stdout)
-                    if scenario in ("valid", "partial"): check(evidence["result"] == "snapshot" and evidence["provider_id"] == {"value": "opencode-go"} and len(evidence["quota_windows"]) == (3 if scenario == "valid" else 2), "installed OpenCode snapshot evidence mismatch")
+                    if scenario in ("valid", "partial"):
+                        windows = {(window["period"], window["used"]["value"], window["remaining"]["value"]) for window in evidence["quota_windows"]}
+                        expected_windows = {("five_hour", "25", "75"), ("weekly", "50", "50"), ("monthly", "75", "25")}
+                        if scenario == "partial": expected_windows.remove(("weekly", "50", "50"))
+                        check(evidence["result"] == "snapshot" and evidence["provider_id"] == {"value": "opencode-go"} and windows == expected_windows, "installed OpenCode snapshot evidence mismatch")
                     else:
                         check(evidence.get("version") == 1 and isinstance(evidence.get("error"), dict), f"scenario={scenario} error_envelope_missing")
                         error = evidence.get("error")

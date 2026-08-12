@@ -20,10 +20,8 @@ class CodexJsonlConfig:
     provider: Literal["codex"] = "codex"
 @dataclass(frozen=True)
 class OpenCodeGoConfig:
-    workspace_id: str = field(repr=False)
-    auth_cookie: str = field(repr=False)
+    api_key: str = field(repr=False)
     provider: Literal["opencode-go"] = "opencode-go"
-    endpoint: str = "https://opencode.ai"
     timeout: timedelta = timedelta(seconds=10)
 ProviderConfig: TypeAlias = CodexJsonlConfig | OpenCodeGoConfig
 class CodexSession(Protocol):
@@ -77,12 +75,9 @@ def _valid_codex(config: CodexJsonlConfig) -> bool:
 def _valid_opencode(config: OpenCodeGoConfig) -> bool:
     return (
         config.provider == "opencode-go"
-        and isinstance(config.workspace_id, str)
-        and bool(config.workspace_id)
-        and config.workspace_id.strip() == config.workspace_id
-        and isinstance(config.auth_cookie, str)
-        and bool(config.auth_cookie)
-        and config.endpoint == "https://opencode.ai"
+        and isinstance(config.api_key, str)
+        and bool(config.api_key)
+        and config.api_key.strip() == config.api_key
         and isinstance(config.timeout, timedelta)
         and timedelta(0) < config.timeout <= timedelta(seconds=10)
     )
@@ -128,9 +123,7 @@ def build_status_client(
             _fail(CompositionErrorKind.DEPENDENCY_MISMATCH)
         if not _valid_clock(dependencies.clock) or not callable(dependencies.transport_factory):
             _fail(CompositionErrorKind.INVALID)
-        adapter_config = AdapterOpenCodeGoConfig(
-            config.workspace_id, config.auth_cookie, config.endpoint, config.timeout
-        )
+        adapter_config = AdapterOpenCodeGoConfig(config.api_key, config.timeout)
         transport = dependencies.transport_factory(config)
         provider = OpenCodeGoProvider(adapter_config, transport, clock=dependencies.clock.now)
         return StatusClient(_cached(provider, cache_policy, dependencies.clock), dependencies.clock)

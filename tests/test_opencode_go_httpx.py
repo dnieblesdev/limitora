@@ -87,19 +87,18 @@ class WorkTrackingChunk(bytes):
 
 class OpenCodeGoHttpxTests(unittest.TestCase):
     def config(self, **changes):
-        values = dict(workspace_id="space/id", auth_cookie="opaque", endpoint="https://opencode.ai", timeout=timedelta(seconds=10))
+        values = dict(api_key="opaque", timeout=timedelta(seconds=10))
         values.update(changes)
         return OpenCodeGoConfig(**values)
 
-    def test_builds_the_exact_private_request_without_leaking_cookie(self):
+    def test_builds_the_exact_private_request_without_leaking_api_key(self):
         sentinel = "unique-sensitive-sentinel"
-        transport = _HttpxOpenCodeGoTransport(self.config(
-            workspace_id=sentinel, auth_cookie=sentinel
-        ))
+        transport = _HttpxOpenCodeGoTransport(self.config(api_key=sentinel))
         request = transport._request()
 
-        self.assertEqual(f"https://opencode.ai/workspace/{sentinel}/go", request.url)
-        self.assertEqual(("Cookie", f"auth={sentinel}"), request.headers[0])
+        self.assertEqual("https://opencode.ai/zen/go/v1/usage", request.url)
+        self.assertEqual(("Authorization", f"Bearer {sentinel}"), request.headers[0])
+        self.assertNotIn("Cookie", dict(request.headers))
         self.assertIsNone(request.body)
         self.assertNotIn(sentinel, repr(request))
 
@@ -110,18 +109,17 @@ class OpenCodeGoHttpxTests(unittest.TestCase):
 
         represented = repr(HttpRequest(
             "POST",
-            "https://opencode.ai/workspace/unique-workspace-sentinel/go",
-            (("Cookie", "auth=unique-cookie-sentinel"),),
+            "https://opencode.ai/zen/go/v1/usage",
+            (("Authorization", "Bearer unique-api-key-sentinel"),),
             sentinel,
             request.timeout,
         ))
 
-        self.assertNotIn("unique-workspace-sentinel", represented)
-        self.assertNotIn("unique-cookie-sentinel", represented)
+        self.assertNotIn("unique-api-key-sentinel", represented)
         self.assertNotIn("unique-request-body-sentinel", represented)
 
     def test_invalid_config_short_circuits(self):
-        invalid = _HttpxOpenCodeGoTransport(self.config(endpoint="https://evil.example"))
+        invalid = _HttpxOpenCodeGoTransport(self.config(api_key=" "))
         self.assertEqual(PortFailureKind.INVALID, invalid.fetch().kind)
 
     def test_configured_timeout_sets_all_httpx_operation_timeouts(self):

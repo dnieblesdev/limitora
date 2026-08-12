@@ -13,14 +13,12 @@ Flag grammar (all forms are space-separated, ``--key=value`` is rejected):
 
     codex:        --runner PATH [--runner ARG ...]
                   [--codex-allow-authorized-source]
-    opencode-go:  --workspace-id ID --auth-cookie COOKIE
-                  [--endpoint URL] [--timeout SECONDS]
-                  [--opencode-allow-authorized-source]
+    opencode-go:  --api-key KEY [--timeout SECONDS]
+                   [--opencode-allow-authorized-source]
 
-OpenCode Go also accepts ``LIMITORA_OPENCODE_WORKSPACE_ID`` and
-``LIMITORA_OPENCODE_AUTH_COOKIE`` through the explicit CLI environment
-boundary. A field cannot be supplied by both its flag and its environment
-variable.
+OpenCode Go also accepts ``LIMITORA_OPENCODE_API_KEY`` through the explicit
+CLI environment boundary. A key cannot be supplied by both its flag and its
+environment variable.
 """
 
 from dataclasses import dataclass, field, replace
@@ -56,11 +54,9 @@ _HELP = (
     "  codex:        --runner PATH [--runner ARG ...]\n"
     "                A single absolute PATH uses 'app-server --stdio'.\n"
     "                [--codex-allow-authorized-source]\n"
-    "  opencode-go:  --workspace-id ID --auth-cookie COOKIE\n"
-    "                [--endpoint URL] [--timeout SECONDS]\n"
+    "  opencode-go:  --api-key KEY [--timeout SECONDS]\n"
     "                [--opencode-allow-authorized-source]\n"
-    "                or LIMITORA_OPENCODE_WORKSPACE_ID /\n"
-    "                LIMITORA_OPENCODE_AUTH_COOKIE\n"
+    "                or LIMITORA_OPENCODE_API_KEY\n"
     "Without --provider, status prints 'no provider configured' to stderr (exit 4).\n"
 )
 _USAGE = "Usage: limitora status [--help] [--json] [--provider {codex,opencode-go}] [flags]\n"
@@ -70,19 +66,17 @@ _BOOLEAN_FLAGS = frozenset({
 })
 _VALUE_FLAGS = frozenset({
     "--provider", "--runner",
-    "--workspace-id", "--auth-cookie", "--endpoint", "--timeout",
+    "--api-key", "--timeout",
 })
 _KNOWN_FLAGS = _BOOLEAN_FLAGS | _VALUE_FLAGS
 _SINGLETON_VALUE_FLAGS = frozenset({
-    "--provider", "--workspace-id", "--auth-cookie", "--endpoint", "--timeout",
+    "--provider", "--api-key", "--timeout",
 })
 _KNOWN_PROVIDERS = frozenset({"codex", "opencode-go"})
-_DEFAULT_ENDPOINT = "https://opencode.ai"
 _DEFAULT_TIMEOUT_SECONDS = 10
 _MAX_TIMEOUT_SECONDS = 10
 _UNCONFIGURED_MESSAGE = "ERROR: no provider configured\n"
-OPENCODE_WORKSPACE_ID_ENV = "LIMITORA_OPENCODE_WORKSPACE_ID"
-OPENCODE_AUTH_COOKIE_ENV = "LIMITORA_OPENCODE_AUTH_COOKIE"
+OPENCODE_API_KEY_ENV = "LIMITORA_OPENCODE_API_KEY"
 
 
 class StatusReader(Protocol):
@@ -113,9 +107,7 @@ class CodexIntent:
 class OpenCodeGoIntent:
     """Intermediate representation for the ``opencode-go`` provider flags."""
 
-    workspace_id: str = field(default="", repr=False)
-    auth_cookie: str = field(default="", repr=False)
-    endpoint: str = _DEFAULT_ENDPOINT
+    api_key: str = field(default="", repr=False)
     timeout_seconds: int = _DEFAULT_TIMEOUT_SECONDS
     allow_authorized_source: bool = False
 
@@ -190,9 +182,7 @@ def parse(argv: list[str], *, environ: Mapping[str, str] | None = None) -> CliIn
     opencode_allow = False
     provider: str | None = None
     codex_runner: list[str] = []
-    opencode_workspace: str | None = None
-    opencode_cookie: str | None = None
-    opencode_endpoint: str | None = None
+    opencode_api_key: str | None = None
     opencode_timeout: int | None = None
 
     i = 0
@@ -236,18 +226,10 @@ def parse(argv: list[str], *, environ: Mapping[str, str] | None = None) -> CliIn
                 provider = value
             elif token == "--runner":
                 codex_runner.append(value)
-            elif token == "--workspace-id":
-                if opencode_workspace is not None:
-                    raise _usage_error("--workspace-id specified more than once")
-                opencode_workspace = value
-            elif token == "--auth-cookie":
-                if opencode_cookie is not None:
-                    raise _usage_error("--auth-cookie specified more than once")
-                opencode_cookie = value
-            elif token == "--endpoint":
-                if opencode_endpoint is not None:
-                    raise _usage_error("--endpoint specified more than once")
-                opencode_endpoint = value
+            elif token == "--api-key":
+                if opencode_api_key is not None:
+                    raise _usage_error("--api-key specified more than once")
+                opencode_api_key = value
             else:  # --timeout
                 if opencode_timeout is not None:
                     raise _usage_error("--timeout specified more than once")
@@ -272,38 +254,31 @@ def parse(argv: list[str], *, environ: Mapping[str, str] | None = None) -> CliIn
     # Cross-flag checks: a codex flag without codex provider (or with opencode)
     if (codex_runner or codex_allow) and provider is not None and provider != "codex":
         raise _usage_error("codex flags require --provider codex")
-    if (opencode_workspace is not None or opencode_cookie is not None
-            or opencode_endpoint is not None or opencode_timeout is not None
+    if (opencode_api_key is not None or opencode_timeout is not None
             or opencode_allow) and provider is not None and provider != "opencode-go":
         raise _usage_error("opencode-go flags require --provider opencode-go")
 
     if provider == "opencode-go":
         environment = _process_environment if environ is None else environ
-        opencode_workspace = _resolve_opencode_source(
-            opencode_workspace, "--workspace-id", OPENCODE_WORKSPACE_ID_ENV, environment
-        )
-        opencode_cookie = _resolve_opencode_source(
-            opencode_cookie, "--auth-cookie", OPENCODE_AUTH_COOKIE_ENV, environment
+        opencode_api_key = _resolve_opencode_source(
+            opencode_api_key, "--api-key", OPENCODE_API_KEY_ENV, environment
         )
 
     # Missing-required checks
     if provider == "codex" and not codex_runner:
         raise _usage_error("--provider codex requires at least one --runner")
     if provider == "opencode-go":
-        if opencode_workspace is None or opencode_cookie is None:
-            raise _usage_error("--provider opencode-go requires --workspace-id and --auth-cookie")
+        if opencode_api_key is None:
+            raise _usage_error("--provider opencode-go requires --api-key")
 
     codex_intent: CodexIntent | None = None
     if codex_runner or codex_allow:
         codex_intent = CodexIntent(tuple(codex_runner), codex_allow)
     opencode_intent: OpenCodeGoIntent | None = None
-    if (opencode_workspace is not None or opencode_cookie is not None
-            or opencode_endpoint is not None or opencode_timeout is not None
+    if (opencode_api_key is not None or opencode_timeout is not None
             or opencode_allow):
         opencode_intent = OpenCodeGoIntent(
-            workspace_id=opencode_workspace or "",
-            auth_cookie=opencode_cookie or "",
-            endpoint=opencode_endpoint or _DEFAULT_ENDPOINT,
+            api_key=opencode_api_key or "",
             timeout_seconds=opencode_timeout if opencode_timeout is not None else _DEFAULT_TIMEOUT_SECONDS,
             allow_authorized_source=opencode_allow,
         )
@@ -330,9 +305,7 @@ def intent_to_config(intent: CliIntent) -> ProviderConfig:
         if intent.opencode is None:  # pragma: no cover - guarded by parse
             raise CompositionError("invalid")
         return OpenCodeGoConfig(
-            workspace_id=intent.opencode.workspace_id,
-            auth_cookie=intent.opencode.auth_cookie,
-            endpoint=intent.opencode.endpoint,
+            api_key=intent.opencode.api_key,
             timeout=timedelta(seconds=intent.opencode.timeout_seconds),
         )
     raise CompositionError("invalid")

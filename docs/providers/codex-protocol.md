@@ -201,10 +201,10 @@ The session is redaction-strict:
   bytes it failed to parse.
 * ``stderr`` is connected to ``subprocess.DEVNULL``; raw process
   output never lands in diagnostics.
-* The child environment is copied at the private spawn boundary with
-  ``LIMITORA_OPENCODE_WORKSPACE_ID`` and ``LIMITORA_OPENCODE_AUTH_COOKIE``
-  removed case-insensitively; unrelated variables remain and ``os.environ`` is
-  not mutated.
+* The child environment is copied at the private spawn boundary with legacy
+  OpenCode credential names and the supported API-key name removed
+  case-insensitively; unrelated variables remain and ``os.environ`` is not
+  mutated.
 * ``_PopenProcess`` requires a native absolute runner path. POSIX accepts
   POSIX absolute paths; Windows accepts drive-qualified and complete UNC
   paths, but rejects POSIX paths, drive-relative or rooted-without-drive

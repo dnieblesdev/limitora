@@ -1,11 +1,10 @@
-"""Private, bounded HTTPX transport for the OpenCode Go dashboard."""
+"""Private, bounded HTTPX transport for the OpenCode Go usage API."""
 
 from __future__ import annotations
 
 from datetime import timedelta
 import time
 from typing import Callable
-from urllib.parse import quote
 
 from .ports import HttpRequest, HttpResponse, PortFailure, PortFailureKind
 
@@ -23,8 +22,10 @@ class _HttpxOpenCodeGoTransport:
         self._httpx_module = httpx_module
 
     def _request(self) -> HttpRequest:
-        url = f"{self._config.endpoint}/workspace/{quote(self._config.workspace_id, safe='')}/go"
-        return HttpRequest("GET", url, (("Cookie", f"auth={self._config.auth_cookie}"),), None, self._config.timeout)
+        return HttpRequest(
+            "GET", "https://opencode.ai/zen/go/v1/usage",
+            (("Authorization", f"Bearer {self._config.api_key}"),), None, self._config.timeout
+        )
 
     @staticmethod
     def _body_failure(size: int) -> PortFailure | None:
@@ -91,8 +92,6 @@ class _HttpxOpenCodeGoTransport:
     def _valid_config(self) -> bool:
         config = self._config
         return (
-            isinstance(config.workspace_id, str) and bool(config.workspace_id.strip()) and config.workspace_id == config.workspace_id.strip()
-            and isinstance(config.auth_cookie, str) and bool(config.auth_cookie)
-            and config.endpoint == "https://opencode.ai"
+            isinstance(config.api_key, str) and bool(config.api_key.strip()) and config.api_key == config.api_key.strip()
             and isinstance(config.timeout, timedelta) and timedelta(0) < config.timeout <= timedelta(seconds=self.BUDGET)
         )
