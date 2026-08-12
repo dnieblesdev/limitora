@@ -98,7 +98,6 @@ jobs:
           run-id: ${{ inputs.workflow-run-id }}
           artifact-ids: ${{ inputs.artifact-id }}
           merge-multiple: true
-          digest-mismatch: error
           path: ${{ runner.temp }}/limitora-opencode-bundle
 
       - name: Verify repository-bound artifact manifest
@@ -161,6 +160,8 @@ jobs:
           mkdir "$RUNNER_TEMP/limitora-opencode-dist"
           cp "$RUNNER_TEMP/limitora-opencode-bundle"/limitora-*.whl "$RUNNER_TEMP/limitora-opencode-dist/"
           cp "$RUNNER_TEMP/limitora-opencode-bundle"/limitora-*.tar.gz "$RUNNER_TEMP/limitora-opencode-dist/"
+          wheelhouse="$RUNNER_TEMP/limitora-opencode-bundle/wheelhouse"
+          python -m pip install --disable-pip-version-check --no-index --find-links "$wheelhouse" "packaging==26.0"
           python scripts/verify_distributions.py "$RUNNER_TEMP/limitora-opencode-dist"
 
       - name: Install wheel in isolated environment
