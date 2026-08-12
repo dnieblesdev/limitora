@@ -70,6 +70,52 @@ class ScriptedProcess:
     def join_reader(self, timeout): self.events.append("join"); return True
 
 
+class _CodexServerMock(ScriptedProcess):
+    """Stateful server boundary that answers only the documented handshake."""
+
+    _METHODS = {"initialize", "initialized", "account/rateLimits/read"}
+    _MISSING = object()
+
+    def __init__(self, client_version: str, rate_limits: dict, *, notifications=("remoteControl/status/changed",)) -> None:
+        super().__init__()
+        self._notifications = tuple(notifications)
+        self._steps = (
+            {"id": 1, "method": "initialize", "params": {"clientInfo": {"name": "limitora", "version": client_version}}},
+            {"method": "initialized", "params": {}},
+            {"id": 2, "method": "account/rateLimits/read", "params": {}},
+        )
+        self._responses = ({"id": 1, "result": {}}, None, {"id": 2, "result": {"rateLimits": rate_limits}})
+        self._step = 0
+
+    def write(self, data: bytes) -> None:
+        try:
+            frame = json.loads(data.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise AssertionError("Codex mock received an invalid frame payload") from None
+        if not isinstance(frame, dict):
+            raise AssertionError("Codex mock received an invalid frame payload")
+        if self._step >= len(self._steps):
+            raise AssertionError("Codex mock received a write after the handshake")
+
+        expected = self._steps[self._step]
+        actual_method = frame.get("method")
+        if actual_method != expected["method"]:
+            if actual_method in self._METHODS:
+                raise AssertionError("Codex mock received a method out of order")
+            raise AssertionError("Codex mock received an unexpected method")
+        if frame.get("id", self._MISSING) != expected.get("id", self._MISSING):
+            raise AssertionError("Codex mock received an unexpected request id")
+        if frame.get("params", object()) != expected["params"] or set(frame) != set(expected):
+            raise AssertionError("Codex mock received an unexpected payload")
+
+        self.writes.append(data)
+        response = self._responses[self._step]
+        if response is not None:
+            self.reads.extend(notification(method) for method in self._notifications)
+            self.reads.append(line(response))
+        self._step += 1
+
+
 class MappingFactory:
     def __init__(self, process): self.process, self.specs = process, []
     def start(self, spec): self.specs.append(spec); return self.process
@@ -100,6 +146,21 @@ class MappingSessionContractTests(unittest.TestCase):
         )
         sent = self.sent_payloads(process)
         self.assertEqual([1, None, 2], [item.get("id") for item in sent])
+
+    def test_exchange_uses_stateful_server_contract_and_returns_rate_limits(self):
+        process = _CodexServerMock(
+            "1.2.3",
+            {"five_hour": {"used_percent": 12}},
+            notifications=("remoteControl/status/changed", "server/ready"),
+        )
+        session, spec = self.session(process)
+
+        self.assertEqual({"rateLimits": {"five_hour": {"used_percent": 12}}}, session.exchange(spec))
+        self.assertEqual(
+            ["initialize", "initialized", "account/rateLimits/read"],
+            self.sent_methods(process),
+        )
+        self.assertEqual([1, None, 2], [json.loads(item).get("id") for item in process.writes])
 
     def test_notification_before_response_is_silently_skipped(self):
         process = ScriptedProcess(reads=[
