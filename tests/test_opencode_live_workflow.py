@@ -160,6 +160,8 @@ class OpenCodeLiveWorkflowTests(unittest.TestCase):
             "authentication",
             "schema_drift",
             "parse_failed",
+            "parse_failed_response",
+            "parse_failed_no_valid_quota_window",
             "unsupported",
             "rate_limited",
             "source_unavailable",
@@ -177,6 +179,13 @@ class OpenCodeLiveWorkflowTests(unittest.TestCase):
             self.assertIn(phrase, self.documentation)
         self.assertIn("--confirm RUN", self.documentation)
         self.assertIn("does not pass `--dotenv`", self.documentation.split("## Manual GitHub Actions run", 1)[-1])
+
+    def test_driver_parse_refinements_are_constant_and_provider_scoped(self):
+        driver = (ROOT / "scripts/opencode_live_driver.py").read_text(encoding="ascii")
+        self.assertIn('28: "parse_failed_response"', driver)
+        self.assertIn('29: "parse_failed_no_valid_quota_window"', driver)
+        self.assertIn("OPENCODE_PARSE_FAILURE_CODES", driver)
+        self.assertIn('if kind == "parse_failed"', driver)
 
 
 if __name__ == "__main__":

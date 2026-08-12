@@ -22,14 +22,20 @@ REQUIRED = (WORKSPACE, COOKIE)
 COMMAND_SUFFIX = ("status", "--json", "--provider", "opencode-go", "--opencode-allow-authorized-source")
 PREFLIGHT, AUTH, SCHEMA_DRIFT, RATE, SOURCE, TRANSPORT, UNEXPECTED = (10, 20, 21, 22, 23, 24, 25)
 PARSE_FAILED, UNSUPPORTED = (26, 27)
+PARSE_FAILED_RESPONSE, PARSE_FAILED_NO_VALID_QUOTA_WINDOW = (28, 29)
 CLASSIFICATIONS = {
     0: "success_snapshot", 10: "preflight", 20: "authentication",
     21: "schema_drift", 22: "rate_limited", 23: "source_unavailable",
     24: "transport", 25: "unexpected_limitora_regression",
-    26: "parse_failed", 27: "unsupported",
+    26: "parse_failed", 27: "unsupported", 28: "parse_failed_response",
+    29: "parse_failed_no_valid_quota_window",
 }
 ERROR_CODES = {"unauthorized": 20, "parse_failed": 26, "unsupported": 27,
                "rate_limited": 22, "source_unavailable": 23, "transport": 24}
+OPENCODE_PARSE_FAILURE_CODES = {
+    "OpenCode Go response could not be parsed": PARSE_FAILED_RESPONSE,
+    "OpenCode Go response has no valid quota window": PARSE_FAILED_NO_VALID_QUOTA_WINDOW,
+}
 ERROR_FIELDS = {"kind", "provider_id", "safe_message", "retryable"}
 MAX_RUNTIME = 15
 MAX_STDOUT = 512 * 1024
@@ -270,6 +276,8 @@ def _classify(exit_code: int, stdout: bytes) -> int:
             return SCHEMA_DRIFT
         if provider["value"] != "opencode-go":
             return UNEXPECTED
+        if kind == "parse_failed" and error["safe_message"] in OPENCODE_PARSE_FAILURE_CODES:
+            return OPENCODE_PARSE_FAILURE_CODES[error["safe_message"]] if exit_code == 5 else UNEXPECTED
         return ERROR_CODES[kind] if exit_code == 5 else UNEXPECTED
     if payload.get("result") != "snapshot":
         return SCHEMA_DRIFT
