@@ -45,15 +45,10 @@ class DriverTests(unittest.TestCase):
         self.cli = self.root / "cli"
         self.cli.write_text("synthetic", encoding="ascii")
         self.cli.chmod(0o700)
-        self.env = {driver.WORKSPACE: "workspace-marker", driver.COOKIE: "cookie-marker",
+        self.env = {driver.API_KEY: "api-key-marker",
                     "PYTHONPATH": "private", "PYTHONHOME": "private"}
     def tearDown(self):
         self.temp.cleanup()
-    def dotenv(self, text, mode=0o600):
-        path = self.root / "inputs.env"
-        path.write_text(text, encoding="utf-8", newline="")
-        path.chmod(mode)
-        return path
     def call(self, args, body=b'{"version":1,"result":"snapshot","provider_id":{"value":"opencode-go"},"freshness":"fresh","quota_windows":[{"kind":"commercial_quota","scope":"account","period":"weekly"}]}', code=0, **kw):
         with patch.object(driver, "_child", return_value=(code, body)) as child:
             with patch.object(driver.os, "name", "posix"), patch.object(
@@ -62,51 +57,21 @@ class DriverTests(unittest.TestCase):
                 result = driver.run(args, environ=kw.pop("environ", self.env))
         return result, None, child
 
-    def test_dotenv_literals_grammar_and_precedence(self):
-        for cookie in ("cookie=marker", "YWJjZA=="):
-            with self.subTest(cookie=cookie):
-                path = self.dotenv(
-                    "# comment\n  # another\n"
-                    "LIMITORA_OPENCODE_WORKSPACE_ID= a$\\'!\n"
-                    f"LIMITORA_OPENCODE_AUTH_COOKIE={cookie}\n"
-                )
-                args = ["--confirm", "RUN", "--cli", str(self.cli), "--dotenv", str(path)]
-                result, _, child = self.call(args, environ={})
-                self.assertEqual(0, result)
-                child_env = child.call_args.args[1]
-                self.assertEqual(" a$\\'!", child_env[driver.WORKSPACE])
-                self.assertEqual(cookie, child_env[driver.COOKIE])
-                self.assertNotIn(cookie, child.call_args.args[0])
-                self.assertNotIn("PYTHONPATH", child_env)
-                self.assertNotIn("PYTHONHOME", child_env)
-                self.assertEqual("1", child_env["PYTHONNOUSERSITE"])
+    def test_api_key_is_required_and_extra_inputs_are_not_accepted(self):
+        self.assertEqual(0, self.call(["--confirm", "RUN", "--cli", str(self.cli)])[0])
+        self.assertEqual(10, driver.run(["--confirm", "RUN", "--cli", str(self.cli)], environ={}))
+        self.assertEqual(10, driver.run(["--confirm", "RUN", "--cli", str(self.cli), "--extra", "ignored"], environ=self.env))
+        self.assertEqual("api-key-marker", self.env[driver.API_KEY])
 
-                output = io.StringIO()
-                with patch.object(driver, "run", return_value=0), redirect_stdout(output):
-                    self.assertEqual(0, driver.main(args))
-                self.assertNotIn(cookie, output.getvalue())
-        self.assertEqual("workspace-marker", self.env[driver.WORKSPACE])
-
-    def test_dotenv_rejects_bad_lines_duplicates_unknown_empty_and_permissions(self):
-        cases = ("export LIMITORA_OPENCODE_WORKSPACE_ID=x\n", "UNKNOWN=x\n", "LIMITORA_OPENCODE_WORKSPACE_ID=x\nLIMITORA_OPENCODE_WORKSPACE_ID=x\n", "LIMITORA_OPENCODE_WORKSPACE_ID=   \n", "LIMITORA_OPENCODE_WORKSPACE_ID=x\x00\n", "LIMITORA_OPENCODE_WORKSPACE_ID=x\ny\n", "LIMITORA_OPENCODE_WORKSPACE_ID\n")
-        for text in cases:
-            with self.subTest(text=text):
-                self.assertEqual(10, driver.run(["--confirm", "RUN", "--cli", str(self.cli), "--dotenv", str(self.dotenv(text))], environ={}))
-        self.assertFalse(driver._dotenv_mode_is_private(0o640, platform="posix"))
-        self.assertTrue(driver._dotenv_mode_is_private(0o640, platform="nt"))
-
-    def test_source_duplicates_empty_conflicts_and_env_only(self):
-        same = self.dotenv("LIMITORA_OPENCODE_WORKSPACE_ID=workspace-marker\nLIMITORA_OPENCODE_AUTH_COOKIE=cookie-marker\n")
-        self.assertEqual(0, self.call(["--confirm", "RUN", "--cli", str(self.cli), "--dotenv", str(same)], environ=self.env)[0])
-        conflict = self.dotenv("LIMITORA_OPENCODE_WORKSPACE_ID=other\nLIMITORA_OPENCODE_AUTH_COOKIE=cookie-marker\n")
-        self.assertEqual(10, driver.run(["--confirm", "RUN", "--cli", str(self.cli), "--dotenv", str(conflict)], environ=self.env))
-        for env in ({driver.WORKSPACE: "", driver.COOKIE: "c"}, {driver.WORKSPACE: "w"}):
-            self.assertEqual(10, driver.run(["--confirm", "RUN", "--cli", str(self.cli)], environ=env))
+    def test_api_key_value_is_validated_without_leaking(self):
+        for value in ("", " ", "api\nkey", "api\x00key"):
+            with self.subTest(value=value):
+                self.assertEqual(10, driver.run(["--confirm", "RUN", "--cli", str(self.cli)], environ={driver.API_KEY: value}))
         self.assertEqual(0, self.call(["--confirm", "RUN", "--cli", str(self.cli)])[0])
 
     def test_child_environment_is_an_allowlist_and_parent_is_unchanged(self):
         environ = {
-            driver.WORKSPACE: "workspace-marker", driver.COOKIE: "cookie-marker",
+            driver.API_KEY: "api-key-marker",
             "CI": "synthetic-ci-secret", "GITHUB_TOKEN": "synthetic-token",
             "HTTP_PROXY": "http://synthetic-proxy", "PATH": "/synthetic-path",
             "PYTHONPATH": "private", "PYTHONHOME": "private",
@@ -116,24 +81,17 @@ class DriverTests(unittest.TestCase):
         self.assertEqual(0, result)
         self.assertEqual(before, environ)
         self.assertEqual(
-            {driver.WORKSPACE, driver.COOKIE, "PYTHONNOUSERSITE"},
+            {driver.API_KEY, "PYTHONNOUSERSITE"},
             set(child.call_args.args[1]),
         )
         self.assertNotIn("synthetic-ci-secret", child.call_args.args[1].values())
         self.assertNotIn("synthetic-token", child.call_args.args[1].values())
 
-    def test_dotenv_limits_are_bounded(self):
-        oversized = "x" * (driver.MAX_DOTENV_BYTES + 1)
-        self.assertEqual(10, driver.run(
-            ["--confirm", "RUN", "--cli", str(self.cli), "--dotenv", str(self.dotenv(oversized))],
-            environ={},
-        ))
+    def test_api_key_limit_is_bounded(self):
         long_value = "x" * (driver.MAX_VALUE_LENGTH + 1)
         self.assertEqual(10, driver.run(
-            ["--confirm", "RUN", "--cli", str(self.cli), "--dotenv", str(self.dotenv(
-                f"{driver.WORKSPACE}={long_value}\n{driver.COOKIE}=cookie\n"
-            ))],
-            environ={},
+            ["--confirm", "RUN", "--cli", str(self.cli)],
+            environ={driver.API_KEY: long_value},
         ))
 
     def test_preflight_confirmation_and_cli_paths_are_constant(self):
@@ -144,9 +102,6 @@ class DriverTests(unittest.TestCase):
         if hasattr(os, "symlink"):
             link.symlink_to(self.cli)
             self.assertEqual(10, driver.run(["--confirm", "RUN", "--cli", str(link)], environ=self.env))
-            env_link = self.root / "env-link"
-            env_link.symlink_to(self.dotenv("LIMITORA_OPENCODE_WORKSPACE_ID=w\nLIMITORA_OPENCODE_AUTH_COOKIE=c\n"))
-            self.assertEqual(10, driver.run(["--confirm", "RUN", "--cli", str(self.cli), "--dotenv", str(env_link)], environ={}))
         self.cli.chmod(0o600)
         with patch.object(driver.os, "access", return_value=False):
             self.assertEqual(10, driver.run(["--confirm", "RUN", "--cli", str(self.cli)], environ=self.env))
@@ -155,8 +110,7 @@ class DriverTests(unittest.TestCase):
         code, _, child = self.call(["--confirm", "RUN", "--cli", str(self.cli)])
         self.assertEqual(0, code)
         self.assertEqual([str(self.cli), *driver.COMMAND_SUFFIX], child.call_args.args[0])
-        self.assertNotIn("workspace-marker", child.call_args.args[0])
-        self.assertNotIn("cookie-marker", child.call_args.args[0])
+        self.assertNotIn("api-key-marker", child.call_args.args[0])
 
     def test_main_emits_one_constant_line(self):
         with patch.object(driver, "run", return_value=10):
@@ -247,22 +201,19 @@ class DriverTests(unittest.TestCase):
         self.assertEqual("parse_failed_no_valid_quota_window", driver.CLASSIFICATIONS[29])
         self.assertEqual("parse_failed_invalid_utf8_json", driver.CLASSIFICATIONS[30])
         self.assertEqual("parse_failed_non_object_json", driver.CLASSIFICATIONS[31])
-        self.assertEqual("parse_failed_html_document", driver.CLASSIFICATIONS[32])
         self.assertNotEqual(driver.PARSE_FAILED, driver.UNSUPPORTED)
         self.assertNotEqual(driver.PARSE_FAILED_INVALID_UTF8_JSON, driver.PARSE_FAILED_NON_OBJECT_JSON)
-        self.assertNotEqual(driver.PARSE_FAILED_NON_OBJECT_JSON, driver.PARSE_FAILED_HTML_DOCUMENT)
-        self.assertNotIn("workspace-marker", json.dumps(driver.CLASSIFICATIONS))
+        self.assertNotEqual(driver.PARSE_FAILED, driver.PARSE_FAILED_NON_OBJECT_JSON)
+        self.assertNotIn("api-key-marker", json.dumps(driver.CLASSIFICATIONS))
         output = io.StringIO()
         with patch.object(driver, "run", return_value=25), redirect_stdout(output):
             driver.main(["--confirm", "RUN", "--cli", str(self.cli)])
-        self.assertNotIn("workspace-marker", output.getvalue())
-        self.assertNotIn("cookie-marker", output.getvalue())
+        self.assertNotIn("api-key-marker", output.getvalue())
 
     def test_known_opencode_parse_messages_are_distinct_and_unknown_messages_stay_generic(self):
         cases = (
             ("OpenCode Go response is not valid UTF-8 JSON", driver.PARSE_FAILED_INVALID_UTF8_JSON),
             ("OpenCode Go response JSON root is not an object", driver.PARSE_FAILED_NON_OBJECT_JSON),
-            ("OpenCode Go response contains an HTML document", driver.PARSE_FAILED_HTML_DOCUMENT),
             ("OpenCode Go response parse detail unavailable", driver.PARSE_FAILED),
             ("OpenCode Go response could not be parsed", driver.PARSE_FAILED),
             ("OpenCode Go response has no valid quota window", driver.PARSE_FAILED_NO_VALID_QUOTA_WINDOW),
@@ -275,7 +226,7 @@ class DriverTests(unittest.TestCase):
                 ))
 
     def test_known_opencode_parse_messages_require_validated_envelopes(self):
-        malformed = b'{"version":1,"error":{"kind":"parse_failed","provider_id":{"value":"opencode-go"},"safe_message":"OpenCode Go response contains an HTML document","retryable":false,"extra":"ignored"}}'
+        malformed = b'{"version":1,"error":{"kind":"parse_failed","provider_id":{"value":"opencode-go"},"safe_message":"OpenCode Go response parse detail unavailable","retryable":false,"extra":"ignored"}}'
         self.assertEqual(driver.SCHEMA_DRIFT, driver._classify(5, malformed))
 
     def test_specific_error_subtypes_require_exact_producer_envelopes(self):

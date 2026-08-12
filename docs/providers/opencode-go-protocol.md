@@ -57,7 +57,7 @@ label, upstream provider limit, or HTTP status does not create a quota value.
 An absent, null, malformed, or unsupported window is not converted to zero.
 If every candidate window is invalid, the provider fails closed rather than
 returning fabricated quota data. Error messages are constant safe summaries;
-credentials, cookies, private response bodies, tracebacks, and raw transport
+credentials, private response bodies, tracebacks, and raw transport
 diagnostics are excluded.
 
 HTTPX synchronous timeouts are per-operation inactivity limits, not a strict

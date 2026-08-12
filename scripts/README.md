@@ -27,7 +27,7 @@ This directory holds helper scripts for development, research, and diagnostics.
 ## OpenCode live driver
 
 `opencode_live_driver.py` is an explicit local operator boundary. It invokes an
-installed Limitora CLI only after `--confirm RUN`, reads the two required inputs
-from the process environment or an explicitly supplied owner-only dotenv file,
-and emits one constant classification line. It does not import Limitora,
-discover files, load dotenv implicitly, or print provider payloads.
+installed Limitora CLI only after `--confirm RUN`, reads the one required API key
+from the process environment, and emits one constant classification line. It
+does not import Limitora, discover files, load dotenv files, or print provider
+payloads.
