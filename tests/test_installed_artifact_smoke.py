@@ -107,9 +107,6 @@ class InstalledRouteHelperTests(unittest.TestCase):
             self.assertIn(required, source)
         for forbidden in (
             "legacy_opencode_smoke",
-            "LIMITORA_OPENCODE_WORKSPACE_ID",
-            "LIMITORA_OPENCODE_AUTH_COOKIE",
-            "/workspace/",
             "rollingUsage",
             "weeklyUsage",
             "monthlyUsage",

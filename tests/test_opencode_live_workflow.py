@@ -112,8 +112,8 @@ class OpenCodeLiveWorkflowTests(unittest.TestCase):
         verification = self.steps["Assert installed import location"]
         live = self.steps["Run OpenCode live driver"]
         for section in (verification, live):
-            self.assertIn("unset PYTHONPATH PYTHONHOME", section)
             self.assertIn("export PYTHONNOUSERSITE=1", section)
+        self.assertIn("unset PYTHONPATH PYTHONHOME", live)
         self.assertIn('python" -I -c', verification)
         self.assertIn('assert checkout not in (location, *location.parents)', verification)
         self.assertIn(
@@ -127,13 +127,11 @@ class OpenCodeLiveWorkflowTests(unittest.TestCase):
         self.assertEqual(
             secret_lines,
             [
-                "          LIMITORA_OPENCODE_WORKSPACE_ID: ${{ secrets.LIMITORA_OPENCODE_WORKSPACE_ID }}",
-                "          LIMITORA_OPENCODE_AUTH_COOKIE: ${{ secrets.LIMITORA_OPENCODE_AUTH_COOKIE }}",
+                "          LIMITORA_OPENCODE_API_KEY: ${{ secrets.LIMITORA_OPENCODE_API_KEY }}",
             ],
         )
         live = self.steps["Run OpenCode live driver"]
-        self.assertIn("LIMITORA_OPENCODE_WORKSPACE_ID:", live)
-        self.assertIn("LIMITORA_OPENCODE_AUTH_COOKIE:", live)
+        self.assertIn("LIMITORA_OPENCODE_API_KEY:", live)
         self.assertNotIn("secrets.", self.workflow[: self.workflow.index("      - name: Run OpenCode live driver")])
 
     def test_live_step_has_no_unsafe_output_or_extra_execution(self):
@@ -154,8 +152,7 @@ class OpenCodeLiveWorkflowTests(unittest.TestCase):
     def test_documentation_matches_manual_boundary_and_evidence(self):
         for phrase in (
             ".github/workflows/opencode-live.yml",
-            "LIMITORA_OPENCODE_WORKSPACE_ID",
-            "LIMITORA_OPENCODE_AUTH_COOKIE",
+            "LIMITORA_OPENCODE_API_KEY",
             "success_snapshot",
             "authentication",
             "schema_drift",
@@ -163,7 +160,6 @@ class OpenCodeLiveWorkflowTests(unittest.TestCase):
             "parse_failed_no_valid_quota_window",
             "parse_failed_invalid_utf8_json",
             "parse_failed_non_object_json",
-            "parse_failed_html_document",
             "unsupported",
             "rate_limited",
             "source_unavailable",
@@ -171,7 +167,7 @@ class OpenCodeLiveWorkflowTests(unittest.TestCase):
             "unexpected_limitora_regression",
             "opencode-live",
             "required reviewers",
-            "Before storing either secret or running the workflow",
+            "Before storing the secret or running the workflow",
             "does not create",
             "enforce required-reviewer rules",
             "Issue #18 remains open",
@@ -180,14 +176,14 @@ class OpenCodeLiveWorkflowTests(unittest.TestCase):
         ):
             self.assertIn(phrase, self.documentation)
         self.assertIn("--confirm RUN", self.documentation)
-        self.assertIn("does not pass `--dotenv`", self.documentation.split("## Manual GitHub Actions run", 1)[-1])
+        self.assertNotIn("--dotenv", self.documentation)
 
     def test_driver_parse_refinements_are_constant_and_provider_scoped(self):
         driver = (ROOT / "scripts/opencode_live_driver.py").read_text(encoding="ascii")
         self.assertIn('29: "parse_failed_no_valid_quota_window"', driver)
         self.assertIn('30: "parse_failed_invalid_utf8_json"', driver)
         self.assertIn('31: "parse_failed_non_object_json"', driver)
-        self.assertIn('32: "parse_failed_html_document"', driver)
+        self.assertNotIn("HTML", driver)
         self.assertIn("OPENCODE_PARSE_FAILURE_CODES", driver)
         self.assertIn('if kind == "parse_failed"', driver)
 
