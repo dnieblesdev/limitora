@@ -93,6 +93,29 @@ class InstalledRouteHelperTests(unittest.TestCase):
         source = Path(__file__).with_name("installed_artifact_smoke.py").read_text(encoding="ascii")
         self.assertIn("opencode_smoke(args.require_opencode_dependency, site_packages, args.cli)", source)
 
+    def test_opencode_smoke_is_bound_to_supported_api_contract(self):
+        source = Path(__file__).with_name("installed_artifact_smoke.py").read_text(encoding="ascii")
+        for required in (
+            '"https://opencode.ai/zen/go/v1/usage"',
+            '"LIMITORA_OPENCODE_API_KEY": api_key',
+            '"usage":{"rolling":{"status":"ok","percent":25,"resetsAt":"2026-07-18T12:00:10Z"}',
+            'request.headers.get_list("authorization") != ["Bearer " + api_key]',
+            'request.headers.get_list("cookie") != []',
+            'request.headers.get_list("origin") != []',
+            'request.content != b""',
+        ):
+            self.assertIn(required, source)
+        for forbidden in (
+            "legacy_opencode_smoke",
+            "LIMITORA_OPENCODE_WORKSPACE_ID",
+            "LIMITORA_OPENCODE_AUTH_COOKIE",
+            "/workspace/",
+            "rollingUsage",
+            "weeklyUsage",
+            "monthlyUsage",
+        ):
+            self.assertNotIn(forbidden, source)
+
     def test_route_config_rejects_invalid_port_or_scenario(self):
         valid = {ROUTE_PORT_ENV: "12345", ROUTE_SCENARIO_ENV: "valid"}
         self.assertEqual((12345, "valid"), route_config(valid))
@@ -126,7 +149,7 @@ class InstalledRouteHelperTests(unittest.TestCase):
 
     def test_redaction_helper_rejects_all_sensitive_markers(self):
         self.assertTrue(redacted("scenario=valid requests=1 contract=true"))
-        for marker in ("workspace/raw-path-marker", "cookie/raw-header-marker", "raw-payload-marker", "proxy/raw-proxy-marker"):
+        for marker in ("api-key/raw-header-marker", "raw-payload-marker", "proxy/raw-proxy-marker"):
             with self.subTest(marker=marker):
                 self.assertFalse(redacted("unsafe " + marker))
 
