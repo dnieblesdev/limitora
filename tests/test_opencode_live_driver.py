@@ -244,13 +244,33 @@ class DriverTests(unittest.TestCase):
         self.assertEqual("schema_drift", driver.CLASSIFICATIONS[21])
         self.assertEqual("parse_failed", driver.CLASSIFICATIONS[26])
         self.assertEqual("unsupported", driver.CLASSIFICATIONS[27])
+        self.assertEqual("parse_failed_response", driver.CLASSIFICATIONS[28])
+        self.assertEqual("parse_failed_no_valid_quota_window", driver.CLASSIFICATIONS[29])
         self.assertNotEqual(driver.PARSE_FAILED, driver.UNSUPPORTED)
+        self.assertNotEqual(driver.PARSE_FAILED_RESPONSE, driver.PARSE_FAILED_NO_VALID_QUOTA_WINDOW)
         self.assertNotIn("workspace-marker", json.dumps(driver.CLASSIFICATIONS))
         output = io.StringIO()
         with patch.object(driver, "run", return_value=25), redirect_stdout(output):
             driver.main(["--confirm", "RUN", "--cli", str(self.cli)])
         self.assertNotIn("workspace-marker", output.getvalue())
         self.assertNotIn("cookie-marker", output.getvalue())
+
+    def test_known_opencode_parse_messages_are_distinct_and_unknown_messages_stay_generic(self):
+        cases = (
+            ("OpenCode Go response could not be parsed", driver.PARSE_FAILED_RESPONSE),
+            ("OpenCode Go response has no valid quota window", driver.PARSE_FAILED_NO_VALID_QUOTA_WINDOW),
+            ("OpenCode Go response parse detail unavailable", driver.PARSE_FAILED),
+            ("private payload marker", driver.PARSE_FAILED),
+        )
+        for safe_message, expected in cases:
+            with self.subTest(safe_message=safe_message):
+                self.assertEqual(expected, driver._classify(
+                    5, error_envelope("parse_failed", safe_message=safe_message)
+                ))
+
+    def test_known_opencode_parse_messages_require_validated_envelopes(self):
+        malformed = b'{"version":1,"error":{"kind":"parse_failed","provider_id":{"value":"opencode-go"},"safe_message":"OpenCode Go response could not be parsed","retryable":false,"extra":"ignored"}}'
+        self.assertEqual(driver.SCHEMA_DRIFT, driver._classify(5, malformed))
 
     def test_specific_error_subtypes_require_exact_producer_envelopes(self):
         cases = (

@@ -53,6 +53,7 @@ class OpenCodeGoProviderTests(unittest.TestCase):
         with self.assertRaises(ProviderError) as raised:
             self.provider(HttpResponse(200, b'{"weeklyUsage":{}}')).fetch(self.request())
         self.assertEqual(ProviderErrorKind.PARSE_FAILED, raised.exception.kind)
+        self.assertEqual("OpenCode Go response has no valid quota window", raised.exception.safe_message)
 
     def test_html_login_and_malformed_bodies_are_safe_parse_failures(self):
         for body in (b"<html><body>login</body></html>", b"not-json"):
@@ -60,6 +61,7 @@ class OpenCodeGoProviderTests(unittest.TestCase):
                 with self.assertRaises(ProviderError) as raised:
                     self.provider(HttpResponse(200, body)).fetch(self.request())
                 self.assertEqual(ProviderErrorKind.PARSE_FAILED, raised.exception.kind)
+                self.assertEqual("OpenCode Go response could not be parsed", raised.exception.safe_message)
                 self.assertNotIn("login", raised.exception.safe_message)
 
     def test_status_mapping_is_typed_and_body_is_not_exposed(self):
