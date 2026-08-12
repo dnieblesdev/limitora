@@ -450,7 +450,7 @@ def legacy_opencode_smoke(require_dependency: bool, site_packages: Path) -> None
         httpx.Client, socket.getaddrinfo, socket.socket, socket.create_connection = originals
 
 
-def opencode_smoke(require_dependency: bool, site_packages: Path) -> tuple[str, ...]:
+def opencode_smoke(require_dependency: bool, site_packages: Path, cli: Path) -> tuple[str, ...]:
     import limitora
     from limitora.providers import AuthorizationPolicy, ProviderError, ProviderErrorKind
     from limitora.providers._opencode_go_httpx import _HttpxOpenCodeGoTransport
@@ -525,7 +525,7 @@ def main() -> None:
     cli_smoke(args.cli)
     codex_smoke(args.cli)
     live_result = live_smoke(args.cli, os.environ)
-    opencode_scenarios = opencode_smoke(args.require_opencode_dependency, site_packages)
+    opencode_scenarios = opencode_smoke(args.require_opencode_dependency, site_packages, args.cli)
     for name, module in sys.modules.items():
         if name == "limitora" or name.startswith("limitora."): check((location := getattr(module, "__file__", None)) is not None and under(Path(location), site_packages), f"imported module is outside site-packages: {name}")
     evidence = {

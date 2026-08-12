@@ -45,7 +45,8 @@ class DriverTests(unittest.TestCase):
     def call(self, args, body=b'{"version":1,"result":"snapshot","provider_id":{"value":"opencode-go"},"freshness":"fresh","quota_windows":[{"kind":"commercial_quota","scope":"account","period":"weekly"}]}', code=0, **kw):
         process = Process(body, code, kw.pop("timeout", False))
         with patch.object(driver.subprocess, "Popen", return_value=process) as popen:
-            result = driver.run(args, environ=kw.pop("environ", self.env))
+            with patch.object(driver.os, "name", "posix"):
+                result = driver.run(args, environ=kw.pop("environ", self.env))
         return result, process, popen
 
     def test_dotenv_literals_grammar_and_precedence(self):
@@ -78,7 +79,8 @@ class DriverTests(unittest.TestCase):
         for text in cases:
             with self.subTest(text=text):
                 self.assertEqual(10, driver.run(["--confirm", "RUN", "--cli", str(self.cli), "--dotenv", str(self.dotenv(text))], environ={}))
-        self.assertEqual(10, driver.run(["--confirm", "RUN", "--cli", str(self.cli), "--dotenv", str(self.dotenv("LIMITORA_OPENCODE_WORKSPACE_ID=x\n", 0o640))], environ={}))
+        with patch.object(driver.os, "name", "posix"):
+            self.assertEqual(10, driver.run(["--confirm", "RUN", "--cli", str(self.cli), "--dotenv", str(self.dotenv("LIMITORA_OPENCODE_WORKSPACE_ID=x\n", 0o640))], environ={}))
 
     def test_source_duplicates_empty_conflicts_and_env_only(self):
         same = self.dotenv("LIMITORA_OPENCODE_WORKSPACE_ID=workspace-marker\nLIMITORA_OPENCODE_AUTH_COOKIE=cookie-marker\n")
@@ -133,7 +135,8 @@ class DriverTests(unittest.TestCase):
             env_link.symlink_to(self.dotenv("LIMITORA_OPENCODE_WORKSPACE_ID=w\nLIMITORA_OPENCODE_AUTH_COOKIE=c\n"))
             self.assertEqual(10, driver.run(["--confirm", "RUN", "--cli", str(self.cli), "--dotenv", str(env_link)], environ={}))
         self.cli.chmod(0o600)
-        self.assertEqual(10, driver.run(["--confirm", "RUN", "--cli", str(self.cli)], environ=self.env))
+        with patch.object(driver.os, "access", return_value=False):
+            self.assertEqual(10, driver.run(["--confirm", "RUN", "--cli", str(self.cli)], environ=self.env))
 
     def test_exact_command_environment_shell_stderr_and_privacy(self):
         code, _, popen = self.call(["--confirm", "RUN", "--cli", str(self.cli)])
@@ -157,9 +160,12 @@ class DriverTests(unittest.TestCase):
         with patch.object(driver, "MAX_STDOUT", 3):
             self.assertEqual(24, self.call(["--confirm", "RUN", "--cli", str(self.cli)], body=b"1234")[0])
         with patch.object(driver.subprocess, "Popen", side_effect=OSError):
-            self.assertEqual(24, driver.run(["--confirm", "RUN", "--cli", str(self.cli)], environ=self.env))
+            with patch.object(driver.os, "name", "posix"):
+                self.assertEqual(24, driver.run(["--confirm", "RUN", "--cli", str(self.cli)], environ=self.env))
 
     def test_timeout_cleanup_signals_the_whole_process_group_with_bounded_waits(self):
+        if not hasattr(driver.signal, "SIGKILL") or not hasattr(driver.os, "killpg"):
+            self.skipTest("POSIX process-group cleanup is unavailable")
         process = Process(timeout=True)
         reader = __import__("threading").Thread(target=lambda: None)
         reader.start()
@@ -174,7 +180,7 @@ class DriverTests(unittest.TestCase):
     def test_held_stdout_pipe_enters_bounded_group_cleanup(self):
         process = Process()
         process.stdout = type("HeldPipe", (), {"read": lambda self, size: b"held"})()
-        with patch.object(driver, "_cleanup_group", return_value=True) as cleanup_group, patch.object(driver.subprocess, "Popen", return_value=process), patch.object(driver, "MAX_RUNTIME", 0.01), patch.object(driver, "MAX_STDOUT", 3):
+        with patch.object(driver, "_cleanup_group", return_value=True) as cleanup_group, patch.object(driver.subprocess, "Popen", return_value=process), patch.object(driver, "MAX_RUNTIME", 0.01), patch.object(driver, "MAX_STDOUT", 3), patch.object(driver.os, "name", "posix"):
             self.assertEqual(24, driver.run(["--confirm", "RUN", "--cli", str(self.cli)], environ=self.env))
         cleanup_group.assert_called_once()
 
@@ -187,8 +193,7 @@ class DriverTests(unittest.TestCase):
         envelopes = [(b'{"version":1,"error":{"kind":"unauthorized"}}', 5, 20), (b'{"version":1,"error":{"kind":"parse_failed"}}', 5, 21), (b'{"version":1,"error":{"kind":"unsupported"}}', 5, 21), (b'{"version":1,"error":{"kind":"rate_limited"}}', 5, 22), (b'{"version":1,"error":{"kind":"source_unavailable"}}', 5, 23), (b'{"version":1,"error":{"kind":"transport"}}', 5, 24), (b'{"version":1,"error":{"kind":"unknown"}}', 5, 25), (b'{"version":1,"error":{"kind":[]}}', 5, 25), (b"not-json", 5, 21), (b'{"version":2}', 0, 21), (b'{"version":1,"result":"snapshot","provider_id":{"value":"other"},"freshness":"fresh","quota_windows":[{"kind":"commercial_quota","scope":"account","period":"weekly"}]}', 0, 25), (b'{"version":1,"result":"snapshot","provider_id":{"value":"opencode-go"},"freshness":"stale","quota_windows":[{"kind":"commercial_quota","scope":"account","period":"weekly"}]}', 0, 25), (b'{"version":1,"result":"snapshot","provider_id":{"value":"opencode-go"},"freshness":"fresh"}', 0, 21), (b'{"version":1,"result":"snapshot","provider_id":{"value":"opencode-go"},"freshness":"fresh","quota_windows":[]}', 0, 21), (b'{"version":1,"result":"snapshot","provider_id":{"value":"opencode-go"},"freshness":"fresh","quota_windows":[{"kind":"technical_rate_limit","scope":"account","period":"weekly"}]}', 0, 21), (b'{"version":1,"result":"snapshot","provider_id":{"value":"opencode-go"},"freshness":"fresh","quota_windows":[{"kind":"commercial_quota","scope":"account","period":"weekly"}]}', 1, 25)]
         for body, exit_code, expected in envelopes:
             with self.subTest(expected=expected):
-                result, _, _ = self.call(["--confirm", "RUN", "--cli", str(self.cli)], body=body, code=exit_code)
-                self.assertEqual(expected, result)
+                self.assertEqual(expected, driver._classify(exit_code, body))
         self.assertNotIn("workspace-marker", json.dumps(driver.CLASSIFICATIONS))
         output = io.StringIO()
         with patch.object(driver, "run", return_value=25), redirect_stdout(output):

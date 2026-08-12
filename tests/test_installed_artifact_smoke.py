@@ -1,4 +1,5 @@
 from pathlib import Path
+import inspect
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -10,6 +11,7 @@ from tests.installed_artifact_smoke import (
     classify_live_outcome,
     cleanup_sitecustomize,
     install_sitecustomize,
+    opencode_smoke,
     preflight_live_codex,
     redacted,
     route_config,
@@ -85,6 +87,12 @@ class LiveOutcomeTests(unittest.TestCase):
 
 
 class InstalledRouteHelperTests(unittest.TestCase):
+    def test_opencode_smoke_requires_the_installed_cli_path(self):
+        parameters = tuple(inspect.signature(opencode_smoke).parameters)
+        self.assertEqual(("require_dependency", "site_packages", "cli"), parameters)
+        source = Path(__file__).with_name("installed_artifact_smoke.py").read_text(encoding="ascii")
+        self.assertIn("opencode_smoke(args.require_opencode_dependency, site_packages, args.cli)", source)
+
     def test_route_config_rejects_invalid_port_or_scenario(self):
         valid = {ROUTE_PORT_ENV: "12345", ROUTE_SCENARIO_ENV: "valid"}
         self.assertEqual((12345, "valid"), route_config(valid))
