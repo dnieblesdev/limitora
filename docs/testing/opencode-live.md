@@ -20,11 +20,15 @@ punctuation are literal; there is no expansion or interpolation. `.env` is
 ignored by the repository and must never be committed.
 
 The process environment is authoritative. Matching dotenv values are accepted;
-conflicts, missing values, malformed input, unsafe paths, and wrong confirmation
-return the constant `preflight` result. The child receives a copied environment
-with `PYTHONPATH` and `PYTHONHOME` removed and `PYTHONNOUSERSITE=1`. Shell
-execution is disabled, stderr is discarded, runtime and stdout are bounded, and
-no secret, path, quota, account, or provider body is rendered.
+conflicts, missing values, malformed input, unsafe paths, oversized dotenv files,
+and wrong confirmation return the constant `preflight` result. The child receives
+only the two required OpenCode inputs and `PYTHONNOUSERSITE=1`; it never inherits
+CI tokens, proxy settings, Python path overrides, or unrelated caller variables.
+Shell execution is disabled, stderr is discarded, runtime and stdout are bounded,
+and no secret, path, quota, account, or provider body is rendered. POSIX execution
+uses a new process group and bounded group cleanup on timeout or output overflow.
+Windows fails closed before live execution because equivalent descendant cleanup is
+not provided by this driver.
 
 The single output line is `OpenCode live result: <classification>`. Codes are
 `0` success, `10` preflight, `20` authentication, `21` schema drift, `22` rate
@@ -45,12 +49,17 @@ contract tests with `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python3 -m unittes
    the live step.
 5. Start the workflow and inspect only the live driver's constant classification.
 
-The workflow checks out the selected target commit, builds a fresh wheel, and
-installs it non-editably into a new virtual environment under `RUNNER_TEMP`.
-The import-location assertion proves that `limitora` resolves from that
-environment rather than the checkout. Python path variables are cleared for
-verification and live invocation. CI does not create or load `.env` files and
-does not pass `--dotenv`.
+The workflow checks out the selected target commit and requires the producing
+protected-release run ID, artifact ID, and artifact digest for that exact SHA. It
+verifies the GitHub artifact service digest, protected workflow identity, receipt
+fields, repository-bound SHA-256 manifest, and the checked-in distribution
+contract before any secret is mapped. The verified wheelhouse is the only package
+source (`--no-index`); the installed wheel is checked with
+`scripts/verify_distributions.py` and then installed non-editably into a new
+virtual environment under `RUNNER_TEMP`. The import-location assertion proves
+that `limitora` resolves from that environment rather than the checkout. Python
+path variables are cleared for verification and live invocation. CI does not
+create or load `.env` files and does not pass `--dotenv`.
 
 The live step emits one line only: `OpenCode live result: <classification>`.
 The classifications are `success_snapshot`, `preflight`, `authentication`,
@@ -58,8 +67,11 @@ The classifications are `success_snapshot`, `preflight`, `authentication`,
 `unexpected_limitora_regression`. A success means the installed CLI returned
 the driver's validated v1 fresh OpenCode snapshot envelope. It does not persist
 provider payloads, quota values, credentials, artifacts, or a GitHub step
-summary. Missing or empty secrets fail preflight; every non-success exit code
-fails the workflow.
+summary. A success also requires non-empty structural commercial-quota window
+evidence. The driver does not inspect or persist quota/account values or
+`safe_message`, credentials, artifacts, or a GitHub step summary. Missing or
+empty secrets fail preflight; missing, empty, or malformed quota windows are
+`schema_drift`; every non-success exit code fails the workflow.
 
 The workflow declares the `opencode-live` Environment and runs only when
 `github.ref` is exactly `refs/heads/main`. GitHub applies the Environment's

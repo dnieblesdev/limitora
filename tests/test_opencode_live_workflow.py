@@ -49,7 +49,7 @@ class OpenCodeLiveWorkflowTests(unittest.TestCase):
 
     def test_permissions_timeout_and_non_overlapping_concurrency(self):
         self.assertEqual(1, self.workflow.count("permissions: {}"))
-        self.assertEqual("    permissions:\n      contents: read\n", block(self.job, "    permissions:"))
+        self.assertEqual("    permissions:\n      contents: read\n      actions: read\n", block(self.job, "    permissions:"))
         self.assertRegex(self.job, r"(?m)^    timeout-minutes: 15$")
         self.assertIn("    if: github.ref == 'refs/heads/main'\n", self.job)
         self.assertIn("    environment: opencode-live\n", self.job)
@@ -64,6 +64,7 @@ class OpenCodeLiveWorkflowTests(unittest.TestCase):
             [
                 "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683",
                 "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
+                "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093",
             ],
         )
         self.assertRegex(self.job, r"(?m)^    runs-on: ubuntu-latest$")
@@ -71,22 +72,34 @@ class OpenCodeLiveWorkflowTests(unittest.TestCase):
         jobs = block(self.workflow, "jobs:")
         self.assertEqual(1, len(re.findall(r"(?m)^  [a-z][a-z0-9-]+:\n", jobs)))
 
-    def test_build_venv_and_non_editable_install_are_scoped(self):
-        build = self.steps["Build fresh wheel from target commit"]
+    def test_artifact_verification_and_offline_install_are_scoped(self):
+        verify = self.steps["Verify protected artifact identity before download"]
+        manifest = self.steps["Verify repository-bound artifact manifest"]
+        distribution = self.steps["Verify installed distribution contract"]
         install = self.steps["Install wheel in isolated environment"]
         gate = "    if: github.ref == 'refs/heads/main'"
         checkout = "          ref: ${{ github.sha }}"
         self.assertLess(self.workflow.index(gate), self.workflow.index(checkout))
         self.assertIn("ref: ${{ github.sha }}", self.workflow)
         self.assertIn("persist-credentials: false", self.workflow)
-        self.assertIn('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"', build)
-        self.assertIn("python -m pip install -r requirements-compatibility.txt", build)
-        self.assertIn("python -m build --wheel", build)
+        self.assertIn("actions: read", self.job)
+        self.assertIn("actions/artifacts/$ARTIFACT_ID", verify)
+        self.assertIn("protected-release.yml", verify)
+        self.assertIn('run.get("conclusion") != "success"', verify)
+        download = self.workflow[self.workflow.index("actions/download-artifact@"):]
+        self.assertIn("github-token: ${{ github.token }}", download)
+        self.assertIn("repository: ${{ github.repository }}", download)
+        self.assertIn("run-id: ${{ inputs.workflow-run-id }}", download)
+        self.assertIn("digest-mismatch: error", download)
+        self.assertIn("manifest.sha256", manifest)
+        self.assertIn("receipt.get(\"source_sha\") != expected_sha", manifest)
+        self.assertIn("scripts/verify_distributions.py", distribution)
         self.assertIn('python -m venv "$RUNNER_TEMP/limitora-opencode-venv"', install)
-        self.assertIn('"httpx==0.28.1"', install)
-        self.assertRegex(install, r'pip install "\$\{wheels\[0\]\}"')
-        self.assertNotIn("--no-editable", install)
-        self.assertNotIn("pip install -e", install)
+        self.assertIn('pip install --no-index --find-links "$wheelhouse" "httpx==0.28.1"', install)
+        self.assertIn('pip install --no-index --no-deps "$wheel"', install)
+        self.assertNotIn("pip install -r requirements-compatibility.txt", self.workflow)
+        self.assertNotIn("python -m build", self.workflow)
+        self.assertNotIn("pip install httpx", self.workflow)
         self.assertIn("pip check", install)
 
     def test_verification_and_live_invocation_clear_python_environment(self):
@@ -126,7 +139,7 @@ class OpenCodeLiveWorkflowTests(unittest.TestCase):
         self.assertNotIn("||", live)
         self.assertNotIn("/bin/limitora", "\n".join(line for line in self.workflow.splitlines() if "python scripts/opencode_live_driver.py" not in line))
         self.assertNotIn("codex", self.workflow.lower())
-        for forbidden in ("--dotenv", "GITHUB_STEP_SUMMARY", "GITHUB_OUTPUT", "GITHUB_ENV", "upload-artifact", "actions/cache"):
+        for forbidden in ("--dotenv", "GITHUB_STEP_SUMMARY", "GITHUB_ENV", "upload-artifact", "actions/cache"):
             self.assertNotIn(forbidden, self.workflow)
         self.assertNotRegex(self.workflow, r"(?<![A-Za-z0-9_])\.env(?:\s|['\"`]|$)")
         self.assertNotIn("PYTHONPATH: src", self.workflow)

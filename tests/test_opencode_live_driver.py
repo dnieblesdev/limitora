@@ -18,6 +18,7 @@ class Process:
     def __init__(self, body=b"", code=0, timeout=False):
         self.stdout, self.returncode, self.timeout = io.BytesIO(body), code, timeout
         self.killed = False
+        self.pid = 1234
     def wait(self, timeout=None):
         if self.timeout and not self.killed:
             raise driver.subprocess.TimeoutExpired("synthetic", timeout)
@@ -41,7 +42,7 @@ class DriverTests(unittest.TestCase):
         path.write_text(text, encoding="utf-8", newline="")
         path.chmod(mode)
         return path
-    def call(self, args, body=b'{"version":1,"result":"snapshot","provider_id":{"value":"opencode-go"},"freshness":"fresh"}', code=0, **kw):
+    def call(self, args, body=b'{"version":1,"result":"snapshot","provider_id":{"value":"opencode-go"},"freshness":"fresh","quota_windows":[{"kind":"commercial_quota","scope":"account","period":"weekly"}]}', code=0, **kw):
         process = Process(body, code, kw.pop("timeout", False))
         with patch.object(driver.subprocess, "Popen", return_value=process) as popen:
             result = driver.run(args, environ=kw.pop("environ", self.env))
@@ -88,6 +89,38 @@ class DriverTests(unittest.TestCase):
             self.assertEqual(10, driver.run(["--confirm", "RUN", "--cli", str(self.cli)], environ=env))
         self.assertEqual(0, self.call(["--confirm", "RUN", "--cli", str(self.cli)])[0])
 
+    def test_child_environment_is_an_allowlist_and_parent_is_unchanged(self):
+        environ = {
+            driver.WORKSPACE: "workspace-marker", driver.COOKIE: "cookie-marker",
+            "CI": "synthetic-ci-secret", "GITHUB_TOKEN": "synthetic-token",
+            "HTTP_PROXY": "http://synthetic-proxy", "PATH": "/synthetic-path",
+            "PYTHONPATH": "private", "PYTHONHOME": "private",
+        }
+        before = dict(environ)
+        result, _, popen = self.call(["--confirm", "RUN", "--cli", str(self.cli)], environ=environ)
+        self.assertEqual(0, result)
+        self.assertEqual(before, environ)
+        self.assertEqual(
+            {driver.WORKSPACE, driver.COOKIE, "PYTHONNOUSERSITE"},
+            set(popen.call_args.kwargs["env"]),
+        )
+        self.assertNotIn("synthetic-ci-secret", popen.call_args.kwargs["env"].values())
+        self.assertNotIn("synthetic-token", popen.call_args.kwargs["env"].values())
+
+    def test_dotenv_limits_are_bounded(self):
+        oversized = "x" * (driver.MAX_DOTENV_BYTES + 1)
+        self.assertEqual(10, driver.run(
+            ["--confirm", "RUN", "--cli", str(self.cli), "--dotenv", str(self.dotenv(oversized))],
+            environ={},
+        ))
+        long_value = "x" * (driver.MAX_VALUE_LENGTH + 1)
+        self.assertEqual(10, driver.run(
+            ["--confirm", "RUN", "--cli", str(self.cli), "--dotenv", str(self.dotenv(
+                f"{driver.WORKSPACE}={long_value}\n{driver.COOKIE}=cookie\n"
+            ))],
+            environ={},
+        ))
+
     def test_preflight_confirmation_and_cli_paths_are_constant(self):
         for args in ([], ["--confirm", "NO", "--cli", str(self.cli)], ["--confirm", "RUN"], ["--confirm", "RUN", "--cli", "relative"], ["--confirm", "RUN", "--cli", str(self.root)], ["--confirm", "RUN", "--cli", str(self.root / "missing")]):
             with self.subTest(args=args):
@@ -119,14 +152,39 @@ class DriverTests(unittest.TestCase):
         printed.assert_called_once_with("OpenCode live result: preflight")
 
     def test_transport_timeout_and_bounded_stdout(self):
-        self.assertEqual(24, self.call(["--confirm", "RUN", "--cli", str(self.cli)], timeout=True)[0])
+        with patch.object(driver, "MAX_RUNTIME", 0.01):
+            self.assertEqual(24, self.call(["--confirm", "RUN", "--cli", str(self.cli)], timeout=True)[0])
         with patch.object(driver, "MAX_STDOUT", 3):
             self.assertEqual(24, self.call(["--confirm", "RUN", "--cli", str(self.cli)], body=b"1234")[0])
         with patch.object(driver.subprocess, "Popen", side_effect=OSError):
             self.assertEqual(24, driver.run(["--confirm", "RUN", "--cli", str(self.cli)], environ=self.env))
 
+    def test_timeout_cleanup_signals_the_whole_process_group_with_bounded_waits(self):
+        process = Process(timeout=True)
+        reader = __import__("threading").Thread(target=lambda: None)
+        reader.start()
+        def signal_group(process, signal_value):
+            if signal_value == driver.signal.SIGKILL:
+                process.killed = True
+            return True
+        with patch.object(driver, "_signal_group", side_effect=signal_group) as signal_group:
+            self.assertTrue(driver._cleanup_group(process, reader, allowance=0.01))
+        self.assertEqual([driver.signal.SIGTERM, driver.signal.SIGKILL], [call.args[1] for call in signal_group.call_args_list])
+
+    def test_held_stdout_pipe_enters_bounded_group_cleanup(self):
+        process = Process()
+        process.stdout = type("HeldPipe", (), {"read": lambda self, size: b"held"})()
+        with patch.object(driver, "_cleanup_group", return_value=True) as cleanup_group, patch.object(driver.subprocess, "Popen", return_value=process), patch.object(driver, "MAX_RUNTIME", 0.01), patch.object(driver, "MAX_STDOUT", 3):
+            self.assertEqual(24, driver.run(["--confirm", "RUN", "--cli", str(self.cli)], environ=self.env))
+        cleanup_group.assert_called_once()
+
+    def test_windows_fails_closed_before_process_start(self):
+        with patch.object(driver.os, "name", "nt"), patch.object(driver, "_native_absolute", return_value=True), patch.object(driver.subprocess, "Popen") as popen:
+            self.assertEqual(24, driver.run(["--confirm", "RUN", "--cli", str(self.cli)], environ=self.env))
+        popen.assert_not_called()
+
     def test_all_classifications_and_safe_output(self):
-        envelopes = [(b'{"version":1,"error":{"kind":"unauthorized"}}', 5, 20), (b'{"version":1,"error":{"kind":"parse_failed"}}', 5, 21), (b'{"version":1,"error":{"kind":"unsupported"}}', 5, 21), (b'{"version":1,"error":{"kind":"rate_limited"}}', 5, 22), (b'{"version":1,"error":{"kind":"source_unavailable"}}', 5, 23), (b'{"version":1,"error":{"kind":"transport"}}', 5, 24), (b'{"version":1,"error":{"kind":"unknown"}}', 5, 25), (b"not-json", 5, 21), (b'{"version":2}', 0, 21), (b'{"version":1,"result":"snapshot","provider_id":{"value":"other"},"freshness":"fresh"}', 0, 25), (b'{"version":1,"result":"snapshot","provider_id":{"value":"opencode-go"},"freshness":"stale"}', 0, 25), (b'{"version":1,"result":"snapshot","provider_id":{"value":"opencode-go"},"freshness":"fresh"}', 1, 25)]
+        envelopes = [(b'{"version":1,"error":{"kind":"unauthorized"}}', 5, 20), (b'{"version":1,"error":{"kind":"parse_failed"}}', 5, 21), (b'{"version":1,"error":{"kind":"unsupported"}}', 5, 21), (b'{"version":1,"error":{"kind":"rate_limited"}}', 5, 22), (b'{"version":1,"error":{"kind":"source_unavailable"}}', 5, 23), (b'{"version":1,"error":{"kind":"transport"}}', 5, 24), (b'{"version":1,"error":{"kind":"unknown"}}', 5, 25), (b'{"version":1,"error":{"kind":[]}}', 5, 25), (b"not-json", 5, 21), (b'{"version":2}', 0, 21), (b'{"version":1,"result":"snapshot","provider_id":{"value":"other"},"freshness":"fresh","quota_windows":[{"kind":"commercial_quota","scope":"account","period":"weekly"}]}', 0, 25), (b'{"version":1,"result":"snapshot","provider_id":{"value":"opencode-go"},"freshness":"stale","quota_windows":[{"kind":"commercial_quota","scope":"account","period":"weekly"}]}', 0, 25), (b'{"version":1,"result":"snapshot","provider_id":{"value":"opencode-go"},"freshness":"fresh"}', 0, 21), (b'{"version":1,"result":"snapshot","provider_id":{"value":"opencode-go"},"freshness":"fresh","quota_windows":[]}', 0, 21), (b'{"version":1,"result":"snapshot","provider_id":{"value":"opencode-go"},"freshness":"fresh","quota_windows":[{"kind":"technical_rate_limit","scope":"account","period":"weekly"}]}', 0, 21), (b'{"version":1,"result":"snapshot","provider_id":{"value":"opencode-go"},"freshness":"fresh","quota_windows":[{"kind":"commercial_quota","scope":"account","period":"weekly"}]}', 1, 25)]
         for body, exit_code, expected in envelopes:
             with self.subTest(expected=expected):
                 result, _, _ = self.call(["--confirm", "RUN", "--cli", str(self.cli)], body=body, code=exit_code)
