@@ -56,13 +56,21 @@ class OpenCodeGoProviderTests(unittest.TestCase):
         self.assertEqual("OpenCode Go response has no valid quota window", raised.exception.safe_message)
 
     def test_html_login_and_malformed_bodies_are_safe_parse_failures(self):
-        for body in (b"<html><body>login</body></html>", b"not-json"):
+        cases = (
+            (b"<html><body>login</body></html>", "OpenCode Go response contains an HTML document"),
+            (b"not-json", "OpenCode Go response is not valid UTF-8 JSON"),
+            (b"\xff", "OpenCode Go response is not valid UTF-8 JSON"),
+            (b"[]", "OpenCode Go response JSON root is not an object"),
+        )
+        for body, safe_message in cases:
             with self.subTest(body=body):
                 with self.assertRaises(ProviderError) as raised:
                     self.provider(HttpResponse(200, body)).fetch(self.request())
                 self.assertEqual(ProviderErrorKind.PARSE_FAILED, raised.exception.kind)
-                self.assertEqual("OpenCode Go response could not be parsed", raised.exception.safe_message)
+                self.assertFalse(raised.exception.retryable)
+                self.assertEqual(safe_message, raised.exception.safe_message)
                 self.assertNotIn("login", raised.exception.safe_message)
+                self.assertNotIn("\xff", raised.exception.safe_message)
 
     def test_status_mapping_is_typed_and_body_is_not_exposed(self):
         for status, kind in ((301, ProviderErrorKind.UNSUPPORTED), (401, ProviderErrorKind.UNAUTHORIZED), (403, ProviderErrorKind.UNAUTHORIZED), (418, ProviderErrorKind.UNSUPPORTED), (429, ProviderErrorKind.RATE_LIMITED), (503, ProviderErrorKind.SOURCE_UNAVAILABLE)):

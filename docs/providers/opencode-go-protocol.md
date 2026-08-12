@@ -51,7 +51,7 @@ label, upstream provider limit, or HTTP status does not create a quota value.
 | 5xx | Typed source-unavailable failure; retryable |
 | HTTP transport timeout or unavailability | Typed `TRANSPORT` failure; retryable where the contract permits |
 | Redirect or other non-2xx response | Typed unsupported failure; no redirect following |
-| HTML login page, malformed JSON, invalid field, or no valid window | Typed parse failure; partial data is retained only when at least one sibling window is valid |
+| HTML login page, invalid UTF-8 or JSON, non-object JSON root, invalid field, or no valid window | Typed parse failure; the provider uses constant cause messages and partial data is retained only when at least one sibling window is valid |
 | Response body at or above 512 KiB or configured request budget exhausted | Bounded transport failure; no further response chunks are processed |
 
 An absent, null, malformed, or unsupported window is not converted to zero.

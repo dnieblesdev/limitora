@@ -18,6 +18,11 @@ from .contract import AuthorizationPolicy, ProviderDetection, ProviderError, Pro
 from .ports import HttpResponse, PortFailure, PortKind
 
 
+PARSE_FAILED_INVALID_UTF8_JSON = "OpenCode Go response is not valid UTF-8 JSON"
+PARSE_FAILED_NON_OBJECT_JSON = "OpenCode Go response JSON root is not an object"
+PARSE_FAILED_HTML_DOCUMENT = "OpenCode Go response contains an HTML document"
+
+
 class _OpenCodeGoTransport(Protocol):
     def fetch(self) -> HttpResponse | PortFailure: ...
 
@@ -63,12 +68,14 @@ class OpenCodeGoProvider(ProviderReader):
             raise ProviderError(ProviderErrorKind.SOURCE_UNAVAILABLE, self.PROVIDER_ID, "OpenCode Go source is unavailable", retryable=True)
         if 300 <= result.status_code <= 399 or not 200 <= result.status_code <= 299:
             raise ProviderError(ProviderErrorKind.UNSUPPORTED, self.PROVIDER_ID, "OpenCode Go response is unsupported", retryable=False)
+        if b"<html" in result.body.lower() or b"<body" in result.body.lower():
+            raise ProviderError(ProviderErrorKind.PARSE_FAILED, self.PROVIDER_ID, PARSE_FAILED_HTML_DOCUMENT, retryable=False)
         try:
             payload = json.loads(result.body)
-            if not isinstance(payload, dict) or b"<html" in result.body.lower() or b"<body" in result.body.lower():
-                raise ValueError
-        except (ValueError, TypeError, json.JSONDecodeError):
-            raise ProviderError(ProviderErrorKind.PARSE_FAILED, self.PROVIDER_ID, "OpenCode Go response could not be parsed", retryable=False)
+        except (UnicodeDecodeError, TypeError, json.JSONDecodeError):
+            raise ProviderError(ProviderErrorKind.PARSE_FAILED, self.PROVIDER_ID, PARSE_FAILED_INVALID_UTF8_JSON, retryable=False)
+        if not isinstance(payload, dict):
+            raise ProviderError(ProviderErrorKind.PARSE_FAILED, self.PROVIDER_ID, PARSE_FAILED_NON_OBJECT_JSON, retryable=False)
         fetched_at = self._clock()
         windows = tuple(self._window(payload, key, period, kind, fetched_at) for key, period, kind in self._WINDOWS)
         valid = tuple(window for window in windows if window is not None)
