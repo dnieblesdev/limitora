@@ -66,7 +66,7 @@ def codex_payload():
         }
     }
 def opencode_response():
-    return HttpResponse(200, b'{"rollingUsage":{"usagePercent":25,"resetInSec":10}}')
+    return HttpResponse(200, b'{"usage":{"rolling":{"status":"ok","percent":25,"resetsAt":"2026-07-18T12:00:10Z"}}}')
 class ProviderCompositionTests(unittest.TestCase):
     def test_cache_option_is_default_off_validated_before_factories_and_wraps_both_providers(self):
         clock, calls = FixedClock(), []
@@ -82,19 +82,19 @@ class ProviderCompositionTests(unittest.TestCase):
         uncached.read_status(REQUEST); uncached.read_status(REQUEST)
         self.assertEqual(2, uncached_session.calls)
         transport = Transport(opencode_response())
-        opencode = build_status_client(OpenCodeGoConfig("workspace", "cookie"), OpenCodeGoDependencies(clock, lambda config: transport), cache_policy=policy)
+        opencode = build_status_client(OpenCodeGoConfig("api-key"), OpenCodeGoDependencies(clock, lambda config: transport), cache_policy=policy)
         opencode.read_status(REQUEST); opencode.read_status(REQUEST)
         self.assertEqual(1, transport.calls)
     def test_configs_are_frozen_and_discriminator_is_closed(self):
         codex = CodexJsonlConfig(NATIVE_RUNNER)
-        opencode = OpenCodeGoConfig("workspace", "opaque-cookie")
+        opencode = OpenCodeGoConfig("opaque-api-key")
 
         self.assertEqual("codex", codex.provider)
         self.assertEqual("opencode-go", opencode.provider)
         with self.assertRaises(FrozenInstanceError):
             codex.runner = ("/other",)
         with self.assertRaises(FrozenInstanceError):
-            opencode.workspace_id = "other"
+            opencode.api_key = "other"
     def test_rejects_disabled_missing_unknown_mutable_and_third_provider(self):
         clock = FixedClock()
         codex_calls, opencode_calls = [], []
@@ -108,7 +108,7 @@ class ProviderCompositionTests(unittest.TestCase):
             (None, deps, True, CompositionErrorKind.MISSING),
             (object(), deps, True, CompositionErrorKind.INVALID),
             ({"provider": "codex", "runner": ("/declared/codex",)}, deps, True, CompositionErrorKind.INVALID),
-            (OpenCodeGoConfig("workspace", "cookie"), deps, True, CompositionErrorKind.DEPENDENCY_MISMATCH),
+            (OpenCodeGoConfig("api-key"), deps, True, CompositionErrorKind.DEPENDENCY_MISMATCH),
             (ThirdCodex(("/declared/codex",)), codex_deps, True, CompositionErrorKind.INVALID),
             (ThirdOpenCode("workspace", "cookie"), opencode_deps, True, CompositionErrorKind.INVALID),
         )
@@ -138,11 +138,10 @@ class ProviderCompositionTests(unittest.TestCase):
             CodexJsonlConfig(("codex",)),
             CodexJsonlConfig((" /declared/codex",)),
             CodexJsonlConfig(("/declared/codex", "")),
-            OpenCodeGoConfig(" ", "cookie"),
-            OpenCodeGoConfig("workspace", ""),
-            OpenCodeGoConfig("workspace", "cookie", endpoint="http://opencode.ai"),
-            OpenCodeGoConfig("workspace", "cookie", timeout=timedelta(0)),
-            OpenCodeGoConfig("workspace", "cookie", timeout=timedelta(seconds=11)),
+            OpenCodeGoConfig(" "),
+            OpenCodeGoConfig("", timeout=timedelta(seconds=10)),
+            OpenCodeGoConfig("api-key", timeout=timedelta(0)),
+            OpenCodeGoConfig("api-key", timeout=timedelta(seconds=11)),
         )
         for config in invalid_configs:
             with self.subTest(config=config):
@@ -225,7 +224,7 @@ class ProviderCompositionTests(unittest.TestCase):
             return Session(codex_payload())
 
         client = build_status_client(
-            OpenCodeGoConfig("workspace", "opaque-cookie"),
+            OpenCodeGoConfig("opaque-api-key"),
             OpenCodeGoDependencies(clock, transport_factory),
         )
         result = client.read_status(REQUEST)
@@ -236,7 +235,7 @@ class ProviderCompositionTests(unittest.TestCase):
         self.assertEqual([], other)
         self.assertEqual(1, transport.calls)
         self.assertIs(client._clock, clock)
-        self.assertEqual("workspace", selected[0].workspace_id)
+        self.assertEqual("opaque-api-key", selected[0].api_key)
     def test_errors_are_constant_and_redacted(self):
         secret = "cookie-that-must-not-leak"
         factory_calls = []
@@ -247,7 +246,7 @@ class ProviderCompositionTests(unittest.TestCase):
 
         with self.assertRaises(CompositionError) as raised:
             build_status_client(
-                OpenCodeGoConfig("workspace", secret, endpoint="http://bad"),
+                OpenCodeGoConfig(secret, timeout=timedelta(0)),
                 OpenCodeGoDependencies(FixedClock(), transport_factory),
             )
 
@@ -302,20 +301,20 @@ class ActivateProviderTests(unittest.TestCase):
     def test_opencode_go_builds_status_client_with_httpx_transport(self):
         from limitora.providers._opencode_go_httpx import _HttpxOpenCodeGoTransport
 
-        client = activate_provider(OpenCodeGoConfig("workspace", "opaque"), clock=FixedClock())
+        client = activate_provider(OpenCodeGoConfig("opaque"), clock=FixedClock())
         self.assertIsInstance(client, StatusClient)
         provider = client._service._provider
         self.assertIsInstance(provider._transport, _HttpxOpenCodeGoTransport)
 
     def test_opencode_go_constructs_with_injected_clock(self):
         clock = FixedClock()
-        client = activate_provider(OpenCodeGoConfig("workspace", "opaque"), clock=clock)
+        client = activate_provider(OpenCodeGoConfig("opaque"), clock=clock)
         self.assertIs(client._clock, clock)
 
     def test_opencode_go_uses_current_clock_by_default(self):
         from limitora.api import CurrentClock
 
-        client = activate_provider(OpenCodeGoConfig("workspace", "opaque"))
+        client = activate_provider(OpenCodeGoConfig("opaque"))
         self.assertIsInstance(client._clock, CurrentClock)
 
     def test_opencode_go_does_not_import_httpx_at_construction(self):
@@ -323,7 +322,7 @@ class ActivateProviderTests(unittest.TestCase):
 
         saved_httpx = sys.modules.pop("httpx", None)
         try:
-            activate_provider(OpenCodeGoConfig("workspace", "opaque"), clock=FixedClock())
+            activate_provider(OpenCodeGoConfig("opaque"), clock=FixedClock())
             self.assertNotIn("httpx", sys.modules)
         finally:
             if saved_httpx is not None:
@@ -340,7 +339,7 @@ class ActivateProviderTests(unittest.TestCase):
 
         deps = OpenCodeGoDependencies(FixedClock(), transport_factory)
         with self.assertRaises(CompositionError):
-            build_status_client(OpenCodeGoConfig("workspace", "opaque"), deps, enabled=False)
+            build_status_client(OpenCodeGoConfig("opaque"), deps, enabled=False)
         self.assertEqual([], transport_calls)
 
     def test_unknown_config_raises_invalid(self):

@@ -31,6 +31,7 @@ __all__ = [
 _PRIVATE_ENV_NAMES = frozenset({
     "limitora_opencode_workspace_id",
     "limitora_opencode_auth_cookie",
+    "limitora_opencode_api_key",
 })
 
 

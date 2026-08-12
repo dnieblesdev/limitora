@@ -262,6 +262,7 @@ class PopenProcessContractTests(unittest.TestCase):
         parent = {
             "LIMITORA_OPENCODE_WORKSPACE_ID": "workspace-secret",
             "limitora_opencode_auth_cookie": "cookie-secret",
+            "LIMITORA_OPENCODE_API_KEY": "api-key-secret",
             "LiMiToRa_OpEnCoDe_WoRkSpAcE_Id": "duplicate-secret",
             "PATH": "/synthetic/bin",
             "UNRELATED": "retained",
@@ -272,6 +273,7 @@ class PopenProcessContractTests(unittest.TestCase):
         self.assertEqual({
             "LIMITORA_OPENCODE_WORKSPACE_ID": "workspace-secret",
             "limitora_opencode_auth_cookie": "cookie-secret",
+            "LIMITORA_OPENCODE_API_KEY": "api-key-secret",
             "LiMiToRa_OpEnCoDe_WoRkSpAcE_Id": "duplicate-secret",
             "PATH": "/synthetic/bin",
             "UNRELATED": "retained",
@@ -282,6 +284,7 @@ class PopenProcessContractTests(unittest.TestCase):
         parent = {
             "LIMITORA_OPENCODE_WORKSPACE_ID": "workspace-secret",
             "lImItOrA_oPeNcOdE_aUtH_cOoKiE": "cookie-secret",
+            "lImItOrA_OpEnCoDe_ApI_KeY": "api-key-secret",
             "KEEP": "value",
         }
         original_environment = dict(os.environ)

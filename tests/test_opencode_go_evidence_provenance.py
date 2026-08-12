@@ -14,27 +14,27 @@ from limitora.providers import AuthorizationPolicy, ProviderRequest
 from limitora.providers._opencode_go import OpenCodeGoConfig, OpenCodeGoProvider
 from limitora.providers.ports import HttpResponse
 
-FIXTURE_PATH = Path(__file__).parent / "fixtures" / "opencode_go_dashboard_usage.json"
+FIXTURE_PATH = Path(__file__).parent / "fixtures" / "opencode_go_usage.json"
 
-SYNTHETIC_SHAPE_SENTINELS = {
-    "rollingUsage": {"usagePercent": 101.001, "resetInSec": 100001},
-    "weeklyUsage": {"usagePercent": 202.002, "resetInSec": 200002},
-    "monthlyUsage": {"usagePercent": 303.003, "resetInSec": 300003},
-    "subscriptionPlan": None,
-}
+SYNTHETIC_SHAPE_SENTINELS = {"usage": {
+    "rolling": {"status": "ok", "percent": 101.001, "resetsAt": "2030-01-01T00:00:01Z"},
+    "weekly": {"status": "ok", "percent": 202.002, "resetsAt": "2030-01-01T00:00:02Z"},
+    "monthly": {"status": "ok", "percent": 303.003, "resetsAt": "2030-01-01T00:00:03Z"},
+}}
 
-PUBLIC_DASHBOARD_CONTEXT = {
-    "source": "https://opencode.ai/docs/go/",
+PUBLIC_API_CONTEXT = {
+    "source": "https://opencode.ai/zen/go/v1/usage",
     "windows": ("five_hour", "weekly", "monthly"),
 }
 
 REFERENCE_CORROBORATION = {
-    "usagePercent": "used percentage points in the inclusive range 0..100",
-    "resetInSec": "non-negative integral seconds after one captured fetched_at",
+    "percent": "used percentage points in the inclusive range 0..100",
+    "resetsAt": "absolute timezone-aware reset timestamp",
+    "status": "ok or rate-limited",
 }
 
 MAPPING_POLICY = {
-    "accepted_windows": ("rollingUsage", "weeklyUsage", "monthlyUsage"),
+    "accepted_windows": ("rolling", "weekly", "monthly"),
     "plan_id": None,
 }
 
@@ -50,14 +50,14 @@ class OpenCodeGoEvidenceProvenanceTests(unittest.TestCase):
     def test_public_context_is_distinct_from_fixture_shape(self) -> None:
         payload = json.loads(FIXTURE_PATH.read_text())
 
-        self.assertEqual(("five_hour", "weekly", "monthly"), PUBLIC_DASHBOARD_CONTEXT["windows"])
-        self.assertNotEqual(PUBLIC_DASHBOARD_CONTEXT, payload)
-        self.assertNotIn("usagePercent", PUBLIC_DASHBOARD_CONTEXT)
-        self.assertNotIn("resetInSec", PUBLIC_DASHBOARD_CONTEXT)
+        self.assertEqual(("five_hour", "weekly", "monthly"), PUBLIC_API_CONTEXT["windows"])
+        self.assertNotEqual(PUBLIC_API_CONTEXT, payload)
+        self.assertNotIn("percent", PUBLIC_API_CONTEXT)
+        self.assertNotIn("resetsAt", PUBLIC_API_CONTEXT)
 
-    def test_reference_corroborates_mapping_without_claiming_dashboard_context(self) -> None:
-        self.assertIn("usagePercent", REFERENCE_CORROBORATION)
-        self.assertIn("resetInSec", REFERENCE_CORROBORATION)
+    def test_reference_corroborates_mapping_without_claiming_private_account_context(self) -> None:
+        self.assertIn("percent", REFERENCE_CORROBORATION)
+        self.assertIn("resetsAt", REFERENCE_CORROBORATION)
         self.assertNotIn("windows", REFERENCE_CORROBORATION)
         self.assertNotIn("source", REFERENCE_CORROBORATION)
 
@@ -66,7 +66,7 @@ class OpenCodeGoEvidenceProvenanceTests(unittest.TestCase):
 
         self.assertIsNone(MAPPING_POLICY["plan_id"])
         self.assertEqual(
-            ("rollingUsage", "weeklyUsage", "monthlyUsage"),
+            ("rolling", "weekly", "monthly"),
             MAPPING_POLICY["accepted_windows"],
         )
         self.assertNotEqual(
@@ -76,11 +76,11 @@ class OpenCodeGoEvidenceProvenanceTests(unittest.TestCase):
 
     def test_production_provider_mapping_corrobates_the_declared_policy(self) -> None:
         fixture = json.loads(FIXTURE_PATH.read_text())
-        payload = {
-            name: {"usagePercent": index * 25, "resetInSec": index * 10}
-            for index, name in enumerate(fixture)
+        payload = {"usage": {
+            name: {"status": "ok", "percent": index * 25, "resetsAt": f"2026-07-18T12:00:{index * 10:02d}Z"}
+            for index, name in enumerate(fixture["usage"])
             if name in MAPPING_POLICY["accepted_windows"]
-        }
+        }}
 
         class StubTransport:
             def fetch(self):
@@ -88,7 +88,7 @@ class OpenCodeGoEvidenceProvenanceTests(unittest.TestCase):
 
         fetched_at = datetime(2026, 7, 18, 12, tzinfo=timezone.utc)
         provider = OpenCodeGoProvider(
-            OpenCodeGoConfig("workspace", "opaque", "https://opencode.ai", timedelta(seconds=10)),
+            OpenCodeGoConfig("opaque", timedelta(seconds=10)),
             StubTransport(),
             clock=lambda: fetched_at,
         )

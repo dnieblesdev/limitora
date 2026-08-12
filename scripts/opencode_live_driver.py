@@ -1,7 +1,7 @@
 """Bounded, local-only OpenCode live operator boundary.
 
 Usage: python scripts/opencode_live_driver.py --confirm RUN --cli /abs/limitora
-Exit codes: 0 success, 10 preflight, 20-32 classified live failures.
+Exit codes: 0 success, 10 preflight, 20-31 classified live failures.
 """
 
 from __future__ import annotations
@@ -16,21 +16,18 @@ import sys
 import threading
 import time
 
-WORKSPACE = "LIMITORA_OPENCODE_WORKSPACE_ID"
-COOKIE = "LIMITORA_OPENCODE_AUTH_COOKIE"
-REQUIRED = (WORKSPACE, COOKIE)
+API_KEY = "LIMITORA_OPENCODE_API_KEY"
 COMMAND_SUFFIX = ("status", "--json", "--provider", "opencode-go", "--opencode-allow-authorized-source")
 PREFLIGHT, AUTH, SCHEMA_DRIFT, RATE, SOURCE, TRANSPORT, UNEXPECTED = (10, 20, 21, 22, 23, 24, 25)
 PARSE_FAILED, UNSUPPORTED = (26, 27)
 PARSE_FAILED_NO_VALID_QUOTA_WINDOW = 29
-PARSE_FAILED_INVALID_UTF8_JSON, PARSE_FAILED_NON_OBJECT_JSON, PARSE_FAILED_HTML_DOCUMENT = (30, 31, 32)
+PARSE_FAILED_INVALID_UTF8_JSON, PARSE_FAILED_NON_OBJECT_JSON = (30, 31)
 CLASSIFICATIONS = {
     0: "success_snapshot", 10: "preflight", 20: "authentication",
     21: "schema_drift", 22: "rate_limited", 23: "source_unavailable",
     24: "transport", 25: "unexpected_limitora_regression",
     26: "parse_failed", 27: "unsupported", 29: "parse_failed_no_valid_quota_window",
     30: "parse_failed_invalid_utf8_json", 31: "parse_failed_non_object_json",
-    32: "parse_failed_html_document",
 }
 ERROR_CODES = {"unauthorized": 20, "parse_failed": 26, "unsupported": 27,
                "rate_limited": 22, "source_unavailable": 23, "transport": 24}
@@ -38,13 +35,10 @@ OPENCODE_PARSE_FAILURE_CODES = {
     "OpenCode Go response has no valid quota window": PARSE_FAILED_NO_VALID_QUOTA_WINDOW,
     "OpenCode Go response is not valid UTF-8 JSON": PARSE_FAILED_INVALID_UTF8_JSON,
     "OpenCode Go response JSON root is not an object": PARSE_FAILED_NON_OBJECT_JSON,
-    "OpenCode Go response contains an HTML document": PARSE_FAILED_HTML_DOCUMENT,
 }
 ERROR_FIELDS = {"kind", "provider_id", "safe_message", "retryable"}
 MAX_RUNTIME = 15
 MAX_STDOUT = 512 * 1024
-MAX_DOTENV_BYTES = 16 * 1024
-MAX_DOTENV_LINES = 32
 MAX_VALUE_LENGTH = 8 * 1024
 
 
@@ -68,22 +62,15 @@ def _native_absolute(path: str) -> bool:
     return os.path.isabs(path)
 
 
-def _regular_executable(path: str, *, dotenv: bool = False) -> None:
+def _regular_executable(path: str) -> None:
     if not _native_absolute(path) or os.path.islink(path) or not os.path.isfile(path):
         raise _PreflightError
     try:
         mode = stat.S_IMODE(os.stat(path, follow_symlinks=False).st_mode)
     except OSError:
         raise _PreflightError
-    if dotenv:
-        if not _dotenv_mode_is_private(mode):
-            raise _PreflightError
-    elif not os.access(path, os.X_OK):
+    if not os.access(path, os.X_OK):
         raise _PreflightError
-
-
-def _dotenv_mode_is_private(mode: int, *, platform: str | None = None) -> bool:
-    return (os.name if platform is None else platform) == "nt" or not mode & 0o077
 
 
 def _value(value: object) -> str:
@@ -93,66 +80,23 @@ def _value(value: object) -> str:
     return value
 
 
-def _dotenv(path: str) -> dict[str, str]:
-    _regular_executable(path, dotenv=True)
-    try:
-        with open(path, "rb") as source:
-            data = source.read(MAX_DOTENV_BYTES + 1)
-        if len(data) > MAX_DOTENV_BYTES:
-            raise _PreflightError
-        text = data.decode("utf-8")
-    except (OSError, UnicodeDecodeError):
-        raise _PreflightError
-    if b"\0" in data or "\r" in text.replace("\r\n", ""):
-        raise _PreflightError
-    lines = text.replace("\r\n", "\n").split("\n")
-    if len(lines) > MAX_DOTENV_LINES:
-        raise _PreflightError
-    values: dict[str, str] = {}
-    for line in lines:
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        if "=" not in line:
-            raise _PreflightError
-        key, raw = line.split("=", 1)
-        if key not in REQUIRED or key in values:
-            raise _PreflightError
-        values[key] = _value(raw)
-    return values
-
-
-def _secrets(environ: dict[str, str], dotenv_path: str | None) -> dict[str, str]:
-    file_values = _dotenv(dotenv_path) if dotenv_path is not None else {}
-    result: dict[str, str] = {}
-    for key in REQUIRED:
-        process = _value(environ[key]) if key in environ else None
-        file_value = file_values.get(key)
-        if process is not None and file_value is not None and process != file_value:
-            raise _PreflightError
-        selected = process if process is not None else file_value
-        if selected is None:
-            raise _PreflightError
-        result[key] = selected
-    return result
-
-
-def _child_environment(secrets: dict[str, str]) -> dict[str, str]:
+def _child_environment(api_key: str) -> dict[str, str]:
     """Pass only the provider inputs and the isolated Python-site setting."""
-    return {WORKSPACE: secrets[WORKSPACE], COOKIE: secrets[COOKIE], "PYTHONNOUSERSITE": "1"}
+    return {API_KEY: api_key, "PYTHONNOUSERSITE": "1"}
 
 
-def _arguments(argv: list[str]) -> tuple[str, str | None, str]:
+def _arguments(argv: list[str]) -> tuple[str, str]:
     values: dict[str, str] = {}
     i = 0
     while i < len(argv):
         name = argv[i]
-        if name not in ("--confirm", "--cli", "--dotenv") or name in values or i + 1 >= len(argv):
+        if name not in ("--confirm", "--cli") or name in values or i + 1 >= len(argv):
             raise _PreflightError
         values[name] = argv[i + 1]
         i += 2
     if values.get("--confirm") != "RUN" or "--cli" not in values:
         raise _PreflightError
-    return values["--cli"], values.get("--dotenv"), values["--confirm"]
+    return values["--cli"], values["--confirm"]
 
 
 def _read_stdout(pipe, box: list[bytes], overflow: threading.Event) -> None:
@@ -310,20 +254,17 @@ def _classify(exit_code: int, stdout: bytes) -> int:
 
 def run(argv: list[str], *, environ: dict[str, str] | None = None) -> int:
     try:
-        cli, dotenv_path, _ = _arguments(argv)
+        cli, _ = _arguments(argv)
         _regular_executable(cli)
-        if dotenv_path is not None:
-            _regular_executable(dotenv_path, dotenv=True)
         source = dict(os.environ if environ is None else environ)
-        child_env = _secrets(source, dotenv_path)
-        child_env.pop("PYTHONPATH", None)
-        child_env.pop("PYTHONHOME", None)
-        child_env["PYTHONNOUSERSITE"] = "1"
+        api_key = _value(source[API_KEY]) if API_KEY in source else None
+        if api_key is None:
+            raise _PreflightError
     except _PreflightError:
         return PREFLIGHT
     if os.name == "nt":
         return TRANSPORT
-    result = _child([cli, *COMMAND_SUFFIX], _child_environment(child_env))
+    result = _child([cli, *COMMAND_SUFFIX], _child_environment(api_key))
     if result is None:
         return TRANSPORT
     return _classify(*result)
