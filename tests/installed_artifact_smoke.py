@@ -508,7 +508,7 @@ def opencode_smoke(require_dependency: bool, site_packages: Path, cli: Path) -> 
                     evidence = json.loads(completed.stdout)
                     if scenario in ("valid", "partial"): check(evidence["result"] == "snapshot" and evidence["provider_id"] == {"value": "opencode-go"} and len(evidence["quota_windows"]) == (3 if scenario == "valid" else 2), "installed OpenCode snapshot evidence mismatch")
                     else:
-                        check(evidence["result"] == "error", f"scenario={scenario} error_envelope_missing")
+                        check(evidence.get("version") == 1 and isinstance(evidence.get("error"), dict), f"scenario={scenario} error_envelope_missing")
                         error = evidence.get("error")
                         check(isinstance(error, dict) and error.get("kind") == ROUTE_ERROR_KINDS[scenario], f"scenario={scenario} error_kind={error.get('kind') if isinstance(error, dict) else 'missing'}")
                     check(redacted(completed.stdout + completed.stderr), "installed OpenCode output leaked unsafe evidence")

@@ -44,7 +44,8 @@ class DriverTests(unittest.TestCase):
         return path
     def call(self, args, body=b'{"version":1,"result":"snapshot","provider_id":{"value":"opencode-go"},"freshness":"fresh","quota_windows":[{"kind":"commercial_quota","scope":"account","period":"weekly"}]}', code=0, **kw):
         with patch.object(driver, "_child", return_value=(code, body)) as child:
-            result = driver.run(args, environ=kw.pop("environ", self.env))
+            with patch.object(driver.os, "name", "posix"):
+                result = driver.run(args, environ=kw.pop("environ", self.env))
         return result, None, child
 
     def test_dotenv_literals_grammar_and_precedence(self):
