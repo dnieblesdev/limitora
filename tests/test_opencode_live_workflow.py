@@ -159,6 +159,8 @@ class OpenCodeLiveWorkflowTests(unittest.TestCase):
             "success_snapshot",
             "authentication",
             "schema_drift",
+            "parse_failed",
+            "unsupported",
             "rate_limited",
             "source_unavailable",
             "transport",

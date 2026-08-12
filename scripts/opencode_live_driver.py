@@ -1,7 +1,7 @@
 """Bounded, local-only OpenCode live operator boundary.
 
 Usage: python scripts/opencode_live_driver.py --confirm RUN --cli /abs/limitora
-Exit codes: 0 success, 10 preflight, 20-25 classified live failures.
+Exit codes: 0 success, 10 preflight, 20-27 classified live failures.
 """
 
 from __future__ import annotations
@@ -20,14 +20,17 @@ WORKSPACE = "LIMITORA_OPENCODE_WORKSPACE_ID"
 COOKIE = "LIMITORA_OPENCODE_AUTH_COOKIE"
 REQUIRED = (WORKSPACE, COOKIE)
 COMMAND_SUFFIX = ("status", "--json", "--provider", "opencode-go", "--opencode-allow-authorized-source")
-PREFLIGHT, AUTH, SCHEMA, RATE, SOURCE, TRANSPORT, UNEXPECTED = (10, 20, 21, 22, 23, 24, 25)
+PREFLIGHT, AUTH, SCHEMA_DRIFT, RATE, SOURCE, TRANSPORT, UNEXPECTED = (10, 20, 21, 22, 23, 24, 25)
+PARSE_FAILED, UNSUPPORTED = (26, 27)
 CLASSIFICATIONS = {
     0: "success_snapshot", 10: "preflight", 20: "authentication",
     21: "schema_drift", 22: "rate_limited", 23: "source_unavailable",
     24: "transport", 25: "unexpected_limitora_regression",
+    26: "parse_failed", 27: "unsupported",
 }
-ERROR_CODES = {"unauthorized": 20, "parse_failed": 21, "unsupported": 21,
+ERROR_CODES = {"unauthorized": 20, "parse_failed": 26, "unsupported": 27,
                "rate_limited": 22, "source_unavailable": 23, "transport": 24}
+ERROR_FIELDS = {"kind", "provider_id", "safe_message", "retryable"}
 MAX_RUNTIME = 15
 MAX_STDOUT = 512 * 1024
 MAX_DOTENV_BYTES = 16 * 1024
@@ -37,6 +40,15 @@ MAX_VALUE_LENGTH = 8 * 1024
 
 class _PreflightError(Exception):
     pass
+
+
+def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON object key")
+        result[key] = value
+    return result
 
 
 def _native_absolute(path: str) -> bool:
@@ -226,28 +238,51 @@ def _child(command: list[str], environ: dict[str, str]) -> tuple[int, bytes] | N
 
 def _classify(exit_code: int, stdout: bytes) -> int:
     try:
-        payload = json.loads(stdout.decode("utf-8"))
+        payload = json.loads(stdout.decode("utf-8"), object_pairs_hook=_reject_duplicate_keys)
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
-        return SCHEMA
-    if not isinstance(payload, dict) or payload.get("version") != 1:
-        return SCHEMA
+        return SCHEMA_DRIFT
+    if (
+        not isinstance(payload, dict)
+        or not isinstance(payload.get("version"), int)
+        or isinstance(payload["version"], bool)
+        or payload["version"] != 1
+    ):
+        return SCHEMA_DRIFT
     if "error" in payload:
         error = payload["error"]
-        kind = error.get("kind") if isinstance(error, dict) else None
-        code = ERROR_CODES.get(kind) if isinstance(kind, str) else None
-        return code if code is not None and exit_code == 5 else UNEXPECTED
+        if set(payload) != {"version", "error"} or not isinstance(error, dict) or set(error) != ERROR_FIELDS:
+            return SCHEMA_DRIFT
+        kind = error["kind"]
+        if not isinstance(kind, str) or kind not in ERROR_CODES:
+            return UNEXPECTED
+        provider = error["provider_id"]
+        if (
+            not isinstance(provider, dict)
+            or set(provider) != {"value"}
+            or not isinstance(provider["value"], str)
+            or not provider["value"]
+            or provider["value"].strip() != provider["value"]
+            or not isinstance(error["safe_message"], str)
+            or not error["safe_message"]
+            or error["safe_message"].strip() != error["safe_message"]
+            or not isinstance(error["retryable"], bool)
+        ):
+            return SCHEMA_DRIFT
+        if provider["value"] != "opencode-go":
+            return UNEXPECTED
+        return ERROR_CODES[kind] if exit_code == 5 else UNEXPECTED
     if payload.get("result") != "snapshot":
-        return SCHEMA
+        return SCHEMA_DRIFT
     if exit_code != 0:
         return UNEXPECTED
     provider = payload.get("provider_id")
     if not isinstance(provider, dict) or "value" not in provider or "freshness" not in payload:
-        return SCHEMA
+        return SCHEMA_DRIFT
     if provider["value"] != "opencode-go" or payload["freshness"] != "fresh":
         return UNEXPECTED
     windows = payload.get("quota_windows")
     if not isinstance(windows, list) or not windows:
-        return SCHEMA
+        return SCHEMA_DRIFT
     if any(
         not isinstance(window, dict)
         or window.get("kind") != "commercial_quota"
@@ -257,7 +292,7 @@ def _classify(exit_code: int, stdout: bytes) -> int:
         or not window["period"]
         for window in windows
     ):
-        return SCHEMA
+        return SCHEMA_DRIFT
     return 0
 
 

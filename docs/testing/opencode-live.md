@@ -32,9 +32,12 @@ not provided by this driver.
 
 The single output line is `OpenCode live result: <classification>`. Codes are
 `0` success, `10` preflight, `20` authentication, `21` schema drift, `22` rate
-limited, `23` source unavailable, `24` transport, and `25` unexpected regression.
-Malformed or stale upstream data is never treated as success. Run the offline
-contract tests with `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python3 -m unittest tests.test_opencode_live_driver -v`.
+limited, `23` source unavailable, `24` transport, `25` unexpected regression,
+`26` provider parse failure, and `27` unsupported provider capability.
+Malformed or structurally invalid upstream data remains `schema_drift`; a
+validated provider error kind of `parse_failed` or `unsupported` is classified
+separately. No upstream payload content is rendered or retained. Run the
+offline contract tests with `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python3 -m unittest tests.test_opencode_live_driver -v`.
 
 ## Manual GitHub Actions run
 
@@ -63,15 +66,16 @@ create or load `.env` files and does not pass `--dotenv`.
 
 The live step emits one line only: `OpenCode live result: <classification>`.
 The classifications are `success_snapshot`, `preflight`, `authentication`,
-`schema_drift`, `rate_limited`, `source_unavailable`, `transport`, and
-`unexpected_limitora_regression`. A success means the installed CLI returned
+`schema_drift`, `parse_failed`, `unsupported`, `rate_limited`,
+`source_unavailable`, `transport`, and `unexpected_limitora_regression`. A success means the installed CLI returned
 the driver's validated v1 fresh OpenCode snapshot envelope. It does not persist
 provider payloads, quota values, credentials, artifacts, or a GitHub step
 summary. A success also requires non-empty structural commercial-quota window
 evidence. The driver does not inspect or persist quota/account values or
 `safe_message`, credentials, artifacts, or a GitHub step summary. Missing or
 empty secrets fail preflight; missing, empty, or malformed quota windows are
-`schema_drift`; every non-success exit code fails the workflow.
+`schema_drift`; provider error kinds `parse_failed` and `unsupported` use their
+own classifications; every non-success exit code fails the workflow.
 
 The workflow declares the `opencode-live` Environment and runs only when
 `github.ref` is exactly `refs/heads/main`. GitHub applies the Environment's

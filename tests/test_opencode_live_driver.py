@@ -14,6 +14,18 @@ driver = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(driver)
 
 
+def error_envelope(kind, *, provider="opencode-go", safe_message="safe provider error", retryable=False):
+    return json.dumps({
+        "version": 1,
+        "error": {
+            "kind": kind,
+            "provider_id": {"value": provider},
+            "safe_message": safe_message,
+            "retryable": retryable,
+        },
+    }, separators=(",", ":")).encode("ascii")
+
+
 class Process:
     def __init__(self, body=b"", code=0, timeout=False):
         self.stdout, self.returncode, self.timeout = io.BytesIO(body), code, timeout
@@ -198,16 +210,71 @@ class DriverTests(unittest.TestCase):
         popen.assert_not_called()
 
     def test_all_classifications_and_safe_output(self):
-        envelopes = [(b'{"version":1,"error":{"kind":"unauthorized"}}', 5, 20), (b'{"version":1,"error":{"kind":"parse_failed"}}', 5, 21), (b'{"version":1,"error":{"kind":"unsupported"}}', 5, 21), (b'{"version":1,"error":{"kind":"rate_limited"}}', 5, 22), (b'{"version":1,"error":{"kind":"source_unavailable"}}', 5, 23), (b'{"version":1,"error":{"kind":"transport"}}', 5, 24), (b'{"version":1,"error":{"kind":"unknown"}}', 5, 25), (b'{"version":1,"error":{"kind":[]}}', 5, 25), (b"not-json", 5, 21), (b'{"version":2}', 0, 21), (b'{"version":1,"result":"snapshot","provider_id":{"value":"other"},"freshness":"fresh","quota_windows":[{"kind":"commercial_quota","scope":"account","period":"weekly"}]}', 0, 25), (b'{"version":1,"result":"snapshot","provider_id":{"value":"opencode-go"},"freshness":"stale","quota_windows":[{"kind":"commercial_quota","scope":"account","period":"weekly"}]}', 0, 25), (b'{"version":1,"result":"snapshot","provider_id":{"value":"opencode-go"},"freshness":"fresh"}', 0, 21), (b'{"version":1,"result":"snapshot","provider_id":{"value":"opencode-go"},"freshness":"fresh","quota_windows":[]}', 0, 21), (b'{"version":1,"result":"snapshot","provider_id":{"value":"opencode-go"},"freshness":"fresh","quota_windows":[{"kind":"technical_rate_limit","scope":"account","period":"weekly"}]}', 0, 21), (b'{"version":1,"result":"snapshot","provider_id":{"value":"opencode-go"},"freshness":"fresh","quota_windows":[{"kind":"commercial_quota","scope":"account","period":"weekly"}]}', 1, 25)]
+        envelopes = [
+            (error_envelope("unauthorized"), 5, 20),
+            (error_envelope("parse_failed"), 5, 26),
+            (error_envelope("unsupported"), 5, 27),
+            (error_envelope("rate_limited"), 5, 22),
+            (error_envelope("source_unavailable"), 5, 23),
+            (error_envelope("transport"), 5, 24),
+            (error_envelope("unknown"), 5, 25),
+            (error_envelope("parse_failed")[:-2] + b"}", 5, 21),
+            (b'{"version":1,"error":{"kind":"parse_failed","provider_id":{"value":"opencode-go"},"safe_message":"safe provider error"}}', 5, 21),
+            (b'{"version":1,"error":{"kind":"parse_failed","provider_id":{"value":"opencode-go"},"safe_message":"safe provider error","retryable":false,"extra":"ignored"}}', 5, 21),
+            (b'{"version":1,"error":{"kind":"parse_failed","provider_id":{"value":"opencode-go","extra":"ignored"},"safe_message":"safe provider error","retryable":false}}', 5, 21),
+            (b'{"version":1,"error":{"kind":"parse_failed","provider_id":{"value":"opencode-go"},"safe_message":[],"retryable":false}}', 5, 21),
+            (b'{"version":1,"error":{"kind":"parse_failed","provider_id":{"value":"opencode-go"},"safe_message":"safe provider error","retryable":"false"}}', 5, 21),
+            (error_envelope("parse_failed", provider="other"), 5, 25),
+            (b'{"version":1,"error":{"kind":"unknown","provider_id":{"value":"opencode-go"},"safe_message":"safe provider error","retryable":false}}', 5, 25),
+            (error_envelope("parse_failed"), 0, 25),
+            (b"not-json", 5, 21),
+            (b'{"version":2}', 0, 21),
+            (b'{"version":true,"error":{"kind":"parse_failed","provider_id":{"value":"opencode-go"},"safe_message":"safe provider error","retryable":false}}', 5, 21),
+            (b'{"version":1,"error":{"kind":"parse_failed","provider_id":{"value":"opencode-go"},"safe_message":"safe provider error","retryable":false},"extra":"ignored"}', 5, 21),
+            (b'{"version":1,"result":"snapshot","provider_id":{"value":"other"},"freshness":"fresh","quota_windows":[{"kind":"commercial_quota","scope":"account","period":"weekly"}]}', 0, 25),
+            (b'{"version":1,"result":"snapshot","provider_id":{"value":"opencode-go"},"freshness":"stale","quota_windows":[{"kind":"commercial_quota","scope":"account","period":"weekly"}]}', 0, 25),
+            (b'{"version":1,"result":"snapshot","provider_id":{"value":"opencode-go"},"freshness":"fresh"}', 0, 21),
+            (b'{"version":1,"result":"snapshot","provider_id":{"value":"opencode-go"},"freshness":"fresh","quota_windows":[]}', 0, 21),
+            (b'{"version":1,"result":"snapshot","provider_id":{"value":"opencode-go"},"freshness":"fresh","quota_windows":[{"kind":"technical_rate_limit","scope":"account","period":"weekly"}]}', 0, 21),
+            (b'{"version":1,"result":"snapshot","provider_id":{"value":"opencode-go"},"freshness":"fresh","quota_windows":[{"kind":"commercial_quota","scope":"account","period":"weekly"}]}', 1, 25),
+        ]
         for body, exit_code, expected in envelopes:
             with self.subTest(expected=expected):
                 self.assertEqual(expected, driver._classify(exit_code, body))
+        self.assertEqual("schema_drift", driver.CLASSIFICATIONS[21])
+        self.assertEqual("parse_failed", driver.CLASSIFICATIONS[26])
+        self.assertEqual("unsupported", driver.CLASSIFICATIONS[27])
+        self.assertNotEqual(driver.PARSE_FAILED, driver.UNSUPPORTED)
         self.assertNotIn("workspace-marker", json.dumps(driver.CLASSIFICATIONS))
         output = io.StringIO()
         with patch.object(driver, "run", return_value=25), redirect_stdout(output):
             driver.main(["--confirm", "RUN", "--cli", str(self.cli)])
         self.assertNotIn("workspace-marker", output.getvalue())
         self.assertNotIn("cookie-marker", output.getvalue())
+
+    def test_specific_error_subtypes_require_exact_producer_envelopes(self):
+        cases = (
+            error_envelope("parse_failed", provider=""),
+            error_envelope("parse_failed", provider="   "),
+            error_envelope("parse_failed", safe_message=""),
+            error_envelope("parse_failed", safe_message="   "),
+            b'{"version":1,"error":{"kind":"parse_failed","provider_id":{"value":"opencode-go"},"safe_message":"safe provider error","retryable":false,"retryable":true}}',
+            b'{"version":1,"error":{"kind":"parse_failed","provider_id":{"value":"opencode-go"},"safe_message":"safe provider error","retryable":false},"error":{"kind":"parse_failed","provider_id":{"value":"opencode-go"},"safe_message":"safe provider error","retryable":false}}',
+        )
+        for body in cases:
+            with self.subTest(body=body):
+                self.assertEqual(driver.SCHEMA_DRIFT, driver._classify(5, body))
+
+        malformed = (
+            b'{"version":1,"error":{"kind":"parse_failed","provider_id":{"value":"opencode-go"},'
+            b'"safe_message":"private payload marker","retryable":false,"retryable":true}}'
+        )
+        self.assertEqual(driver.SCHEMA_DRIFT, driver._classify(5, malformed))
+        output = io.StringIO()
+        with patch.object(driver, "run", return_value=driver.SCHEMA_DRIFT), redirect_stdout(output):
+            self.assertEqual(driver.SCHEMA_DRIFT, driver.main([]))
+        self.assertEqual("OpenCode live result: schema_drift\n", output.getvalue())
+        self.assertNotIn("private payload marker", output.getvalue())
 
     def test_driver_source_has_no_provider_imports(self):
         source = (ROOT / "scripts/opencode_live_driver.py").read_text(encoding="utf-8")
