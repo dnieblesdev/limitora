@@ -28,6 +28,16 @@ __all__ = [
     "_cleanup",
 ]
 
+_PRIVATE_ENV_NAMES = frozenset({
+    "limitora_opencode_workspace_id",
+    "limitora_opencode_auth_cookie",
+})
+
+
+def _sanitized_child_environment(environ: dict[str, str]) -> dict[str, str]:
+    """Copy the parent environment without exposing OpenCode credentials."""
+    return {key: value for key, value in environ.items() if key.casefold() not in _PRIVATE_ENV_NAMES}
+
 
 class _Process(Protocol):
     """The narrow process-handle protocol used by the transport layer."""
@@ -122,6 +132,7 @@ class _PopenProcess:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             shell=False,
+            env=_sanitized_child_environment(os.environ),
         )
         self._reader: Optional[_PipeReader] = None
         self._remainder = bytearray()

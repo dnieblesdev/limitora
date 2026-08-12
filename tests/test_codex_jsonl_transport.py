@@ -26,6 +26,7 @@ from limitora.providers._codex_jsonl_transport import (
     _ReadKind,
     _ReadSignal,
     _cleanup,
+    _sanitized_child_environment,
 )
 
 
@@ -243,6 +244,8 @@ class PopenProcessContractTests(unittest.TestCase):
             "limitora.providers._codex_jsonl_transport.subprocess.Popen"
         ) as popen, patch(
             "limitora.providers._codex_jsonl_transport._PipeReader"
+        ), patch(
+            "limitora.providers._codex_jsonl_transport.os.environ", {}
         ):
             _PopenProcess(command)
 
@@ -252,7 +255,57 @@ class PopenProcessContractTests(unittest.TestCase):
             stdout=-1,
             stderr=-3,
             shell=False,
+            env={},
         )
+
+    def test_child_environment_removes_case_insensitive_open_code_values(self):
+        parent = {
+            "LIMITORA_OPENCODE_WORKSPACE_ID": "workspace-secret",
+            "limitora_opencode_auth_cookie": "cookie-secret",
+            "LiMiToRa_OpEnCoDe_WoRkSpAcE_Id": "duplicate-secret",
+            "PATH": "/synthetic/bin",
+            "UNRELATED": "retained",
+        }
+        sanitized = _sanitized_child_environment(parent)
+
+        self.assertEqual({"PATH": "/synthetic/bin", "UNRELATED": "retained"}, sanitized)
+        self.assertEqual({
+            "LIMITORA_OPENCODE_WORKSPACE_ID": "workspace-secret",
+            "limitora_opencode_auth_cookie": "cookie-secret",
+            "LiMiToRa_OpEnCoDe_WoRkSpAcE_Id": "duplicate-secret",
+            "PATH": "/synthetic/bin",
+            "UNRELATED": "retained",
+        }, parent)
+
+    def test_popen_passes_sanitized_environment_without_changing_process_semantics(self):
+        command = ("native-runner", "app-server", "--stdio")
+        parent = {
+            "LIMITORA_OPENCODE_WORKSPACE_ID": "workspace-secret",
+            "lImItOrA_oPeNcOdE_aUtH_cOoKiE": "cookie-secret",
+            "KEEP": "value",
+        }
+        original_environment = dict(os.environ)
+        with patch(
+            "limitora.providers._codex_jsonl_transport._is_native_absolute_runner_path",
+            return_value=True,
+        ), patch(
+            "limitora.providers._codex_jsonl_transport.os.environ", parent
+        ), patch(
+            "limitora.providers._codex_jsonl_transport.subprocess.Popen"
+        ) as popen, patch(
+            "limitora.providers._codex_jsonl_transport._PipeReader"
+        ):
+            _PopenProcess(command)
+
+        args, kwargs = popen.call_args
+        self.assertEqual((command,), args)
+        self.assertEqual(-1, kwargs.get("bufsize", -1))
+        self.assertEqual(-1, kwargs["stdin"])
+        self.assertEqual(-1, kwargs["stdout"])
+        self.assertEqual(-3, kwargs["stderr"])
+        self.assertFalse(kwargs["shell"])
+        self.assertEqual({"KEEP": "value"}, kwargs["env"])
+        self.assertEqual(original_environment, dict(os.environ))
 
     def test_read_preserves_partial_remainder_timeout_eof_and_error(self):
         child = MagicMock()

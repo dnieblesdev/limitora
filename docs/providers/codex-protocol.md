@@ -22,6 +22,24 @@ JSON-RPC schema for every app-server version. The executable endpoint,
 available methods, and response fields can change, so unsupported or malformed
 provider input fails closed rather than being guessed.
 
+## Installed and live evidence
+
+The installed-artifact smoke executes the installed `limitora` CLI and a real
+temporary fake Codex child. The fake validates the exact three-message order,
+including `clientInfo`, notification/request ids, empty rate-limit params, and
+the absence of outbound `jsonrpc`; it emits a synthetic snapshot with
+snapshot-level `rateLimits.limitId`, known plan/windows, and reset timestamps.
+Human and JSON output are checked for mapped provider identity and windows.
+Receipts contain only structural method/order evidence, never provider payloads
+or environment values.
+
+The same harness has a disabled-by-default live path. Only
+`LIMITORA_CODEX_LIVE=1` permits `shutil.which("codex")` discovery; there is no
+production binary discovery or arbitrary runner override, and no workflow turns
+the path on automatically. Preflight rejects missing, relative/non-native,
+invalid, directory, and non-executable candidates with distinct redacted
+classifications. Live results retain only safe typed-envelope/exit information.
+
 ## Layered split
 
 The session is split into three private modules behind the unchanged
@@ -183,6 +201,10 @@ The session is redaction-strict:
   bytes it failed to parse.
 * ``stderr`` is connected to ``subprocess.DEVNULL``; raw process
   output never lands in diagnostics.
+* The child environment is copied at the private spawn boundary with
+  ``LIMITORA_OPENCODE_WORKSPACE_ID`` and ``LIMITORA_OPENCODE_AUTH_COOKIE``
+  removed case-insensitively; unrelated variables remain and ``os.environ`` is
+  not mutated.
 * ``_PopenProcess`` requires a native absolute runner path. POSIX accepts
   POSIX absolute paths; Windows accepts drive-qualified and complete UNC
   paths, but rejects POSIX paths, drive-relative or rooted-without-drive

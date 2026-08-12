@@ -79,7 +79,7 @@ config = OpenCodeGoConfig(workspace_id, auth_cookie)
 client = activate_provider(config)
 ```
 
-The consuming application owns environment or configuration access and passes values explicitly; Limitora does not read credentials from the environment. Treat both `workspace_id` and `auth_cookie` as sensitive. Limitora-controlled representations omit them, and request representations omit workspace-bearing URLs, headers, and bodies.
+The consuming application owns environment or configuration access and passes values explicitly. The `limitora status` CLI additionally accepts OpenCode Go values from `LIMITORA_OPENCODE_WORKSPACE_ID` and `LIMITORA_OPENCODE_AUTH_COOKIE`; it rejects mixing a flag with its corresponding variable and never loads `.env` files. Treat both `workspace_id` and `auth_cookie` as sensitive. Limitora-controlled representations omit them, and request representations omit workspace-bearing URLs, headers, and bodies.
 
 ## CLI status
 

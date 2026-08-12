@@ -18,7 +18,8 @@ from limitora import (
 )
 from limitora.composition import CodexJsonlConfig, CompositionError, OpenCodeGoConfig, activate_provider
 from limitora.cli import (
-    CliIntent, CliUsageError, CodexIntent, OpenCodeGoIntent, _HELP, _USAGE,
+    CliIntent, CliUsageError, CodexIntent, OpenCodeGoIntent,
+    OPENCODE_AUTH_COOKIE_ENV, OPENCODE_WORKSPACE_ID_ENV, _HELP, _USAGE,
     intent_to_config, main, parse,
 )
 from limitora.models import Quantity, QuotaWindow, UsageSnapshot, ValueAvailability, WindowKind
@@ -51,12 +52,14 @@ class FakeClient:
         return self.result
 
 
-def invoke(argv, result=None):
+def invoke(argv, result=None, environ=None):
+    if environ is None:
+        environ = {}
     output, errors = StringIO(), StringIO()
     client = FakeClient(result) if result is not None else None
     factory_calls = []
     def factory(): factory_calls.append(True); return client
-    code = main(argv, client_factory=factory if client else None, stdout=output, stderr=errors)
+    code = main(argv, client_factory=factory if client else None, stdout=output, stderr=errors, environ=environ)
     return code, output.getvalue(), errors.getvalue(), client, factory_calls
 
 
@@ -66,15 +69,17 @@ def invoke_with_factory(argv, factory):
     return code, output.getvalue(), errors.getvalue()
 
 
-def invoke_with_provider(argv, client):
+def invoke_with_provider(argv, client, environ=None):
     """Invoke the CLI while patching ``activate_provider`` to return ``client``.
 
     The CLI delegates to ``activate_provider`` whenever ``--provider`` is
     given, so the test injects the pre-built client through that seam.
     """
+    if environ is None:
+        environ = {}
     output, errors = StringIO(), StringIO()
     with patch("limitora.cli.activate_provider", return_value=client) as mock_activate:
-        code = main(argv, stdout=output, stderr=errors)
+        code = main(argv, stdout=output, stderr=errors, environ=environ)
     return code, output.getvalue(), errors.getvalue(), client, mock_activate
 
 
@@ -100,6 +105,8 @@ class HelpAndUnconfiguredTests(unittest.TestCase):
         self.assertIn("--timeout", _HELP)
         self.assertIn("--endpoint", _HELP)
         self.assertIn("app-server --stdio", _HELP)
+        self.assertIn(OPENCODE_WORKSPACE_ID_ENV, _HELP)
+        self.assertIn(OPENCODE_AUTH_COOKIE_ENV, _HELP)
 
     def test_no_flags_routes_to_unconfigured_stderr_and_exit_four(self):
         code, output, errors, _, _ = invoke(["status"])
@@ -289,13 +296,83 @@ class ParseUnitTests(unittest.TestCase):
         intent = parse([
             "status", "--provider", "opencode-go",
             "--workspace-id", "ws1", "--auth-cookie", "c1",
-        ])
+        ], environ={})
         self.assertEqual("opencode-go", intent.provider)
         self.assertEqual("ws1", intent.opencode.workspace_id)
         self.assertEqual("c1", intent.opencode.auth_cookie)
         self.assertEqual("https://opencode.ai", intent.opencode.endpoint)
         self.assertEqual(10, intent.opencode.timeout_seconds)
         self.assertFalse(intent.opencode.allow_authorized_source)
+
+    def test_parse_opencode_env_only_resolves_both_sensitive_fields(self):
+        environ = {
+            OPENCODE_WORKSPACE_ID_ENV: "synthetic-workspace",
+            OPENCODE_AUTH_COOKIE_ENV: "synthetic-cookie",
+        }
+        intent = parse(["status", "--provider", "opencode-go"], environ=environ)
+
+        self.assertEqual("synthetic-workspace", intent.opencode.workspace_id)
+        self.assertEqual("synthetic-cookie", intent.opencode.auth_cookie)
+
+    def test_parse_opencode_allows_different_sources_per_field(self):
+        intent = parse([
+            "status", "--provider", "opencode-go",
+            "--workspace-id", "synthetic-workspace",
+        ], environ={OPENCODE_AUTH_COOKIE_ENV: "synthetic-cookie"})
+
+        self.assertEqual("synthetic-workspace", intent.opencode.workspace_id)
+        self.assertEqual("synthetic-cookie", intent.opencode.auth_cookie)
+
+    def test_parse_opencode_rejects_mixed_sources_for_one_field(self):
+        with self.assertRaises(CliUsageError) as raised:
+            parse([
+                "status", "--provider", "opencode-go",
+                "--workspace-id", "synthetic-workspace",
+                "--auth-cookie", "synthetic-cookie",
+            ], environ={OPENCODE_WORKSPACE_ID_ENV: "other-workspace"})
+
+        message = str(raised.exception)
+        self.assertIn(OPENCODE_WORKSPACE_ID_ENV, message)
+        self.assertNotIn("synthetic-workspace", message)
+        self.assertNotIn("other-workspace", message)
+
+    def test_parse_opencode_rejects_empty_environment_values(self):
+        for environment_name in (OPENCODE_WORKSPACE_ID_ENV, OPENCODE_AUTH_COOKIE_ENV):
+            for value in ("", "   ", "\t\n"):
+                with self.subTest(environment_name=environment_name, value=repr(value)):
+                    environ = {
+                        OPENCODE_WORKSPACE_ID_ENV: "synthetic-workspace",
+                        OPENCODE_AUTH_COOKIE_ENV: "synthetic-cookie",
+                    }
+                    environ[environment_name] = value
+                    with self.assertRaises(CliUsageError) as raised:
+                        parse(["status", "--provider", "opencode-go"], environ=environ)
+                    self.assertIn(environment_name, str(raised.exception))
+
+    def test_parse_opencode_requires_both_fields_after_source_resolution(self):
+        for environ in (
+            {},
+            {OPENCODE_WORKSPACE_ID_ENV: "synthetic-workspace"},
+            {OPENCODE_AUTH_COOKIE_ENV: "synthetic-cookie"},
+        ):
+            with self.subTest(environ=tuple(environ)):
+                with self.assertRaises(CliUsageError):
+                    parse(["status", "--provider", "opencode-go"], environ=environ)
+
+    def test_parse_environment_is_not_consulted_for_non_opencode_paths(self):
+        class FailingEnvironment(dict):
+            def __contains__(self, key):
+                raise AssertionError(f"environment consulted: {key}")
+
+            def __getitem__(self, key):
+                raise AssertionError(f"environment consulted: {key}")
+
+        environ = FailingEnvironment()
+        self.assertEqual("codex", parse([
+            "status", "--provider", "codex", "--runner", "/bin/codex",
+        ], environ=environ).provider)
+        self.assertTrue(parse(["status", "--help"], environ=environ).help_requested)
+        self.assertIsNone(parse(["status"], environ=environ).provider)
 
     def test_parse_allow_authorized_source_flags(self):
         codex_intent = parse([
@@ -307,7 +384,7 @@ class ParseUnitTests(unittest.TestCase):
             "status", "--provider", "opencode-go",
             "--workspace-id", "ws", "--auth-cookie", "c",
             "--opencode-allow-authorized-source",
-        ])
+        ], environ={})
         self.assertTrue(opencode_intent.opencode.allow_authorized_source)
 
     def test_parse_raises_usage_error_for_known_violations(self):
@@ -389,6 +466,24 @@ class IntentToConfigUnitTests(unittest.TestCase):
         with patch("subprocess.Popen") as mock_popen:
             intent_to_config(intent)
         mock_popen.assert_not_called()
+
+
+class OpenCodeEnvironmentActivationTests(unittest.TestCase):
+    def test_env_only_activation_uses_resolved_values_without_rendering_them(self):
+        fake = FakeClient(snapshot())
+        code, output, errors, _, mock_activate = invoke_with_provider(
+            ["status", "--provider", "opencode-go"], fake, environ={
+                OPENCODE_WORKSPACE_ID_ENV: "synthetic-workspace",
+                OPENCODE_AUTH_COOKIE_ENV: "synthetic-cookie",
+            }
+        )
+
+        self.assertEqual(0, code)
+        self.assertEqual("", errors)
+        self.assertIn("RESULT: snapshot", output)
+        config = mock_activate.call_args.args[0]
+        self.assertEqual("synthetic-workspace", config.workspace_id)
+        self.assertEqual("synthetic-cookie", config.auth_cookie)
 
 
 class CodexActivationTests(unittest.TestCase):
@@ -503,8 +598,28 @@ class PrivacyContractTests(unittest.TestCase):
     def test_cli_source_excludes_privacy_forbidden_symbols(self):
         project = Path(__file__).parents[1]
         source = (project / "src/limitora/cli/__init__.py").read_text()
-        for forbidden in ("argparse", "subprocess", "import os", "pathlib", "StatusProvider"):
+        for forbidden in ("argparse", "subprocess", "pathlib", "StatusProvider", "dotenv", ".env"):
             self.assertNotIn(forbidden, source)
+
+    def test_environment_names_are_stable_and_values_are_not_rendered(self):
+        self.assertEqual("LIMITORA_OPENCODE_WORKSPACE_ID", OPENCODE_WORKSPACE_ID_ENV)
+        self.assertEqual("LIMITORA_OPENCODE_AUTH_COOKIE", OPENCODE_AUTH_COOKIE_ENV)
+        code, output, errors, _, _ = invoke(["status", "--provider", "opencode-go"], environ={
+            OPENCODE_WORKSPACE_ID_ENV: "synthetic-workspace",
+            OPENCODE_AUTH_COOKIE_ENV: "synthetic-cookie",
+        })
+        self.assertEqual(5, code)
+        self.assertNotIn("synthetic-workspace", output + errors)
+        self.assertNotIn("synthetic-cookie", output + errors)
+
+    def test_cli_environment_mapping_is_not_mutated(self):
+        environ = {
+            OPENCODE_WORKSPACE_ID_ENV: "synthetic-workspace",
+            OPENCODE_AUTH_COOKIE_ENV: "synthetic-cookie",
+        }
+        before = environ.copy()
+        invoke(["status", "--provider", "opencode-go"], environ=environ)
+        self.assertEqual(before, environ)
 
     def test_cli_module_delegates_rendering_to_output(self):
         project = Path(__file__).parents[1]
