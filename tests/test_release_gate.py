@@ -3,6 +3,7 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 LEDGER = ROOT / "release/ledger.json"
 DOSSIER = ROOT / "release/0.2.0.md"
+HISTORICAL_DOSSIER = ROOT / "release/0.1.0.md"
 WORKFLOW = ROOT / ".github/workflows/protected-release.yml"
 APPROVED_WORKFLOW_SHA256 = "71cced37d53a0f73a6ba8d659aa6cc3a87473da29b494281fab034e1df0599a8"
 
@@ -16,6 +17,7 @@ class ReleaseGateTests(unittest.TestCase):
         cls.ledger_text = cls.ledger_bytes.decode("ascii")
         cls.ledger = json.loads(cls.ledger_text)
         cls.doc = DOSSIER.read_text(encoding="utf-8")
+        cls.historical_doc = HISTORICAL_DOSSIER.read_text(encoding="utf-8")
     def test_ledger_is_exact_and_ascii(self):
         self.assertEqual(set(self.ledger), {"schema_version", "version", "source_sha"})
         self.assertEqual(self.ledger["schema_version"], 1)
@@ -30,7 +32,7 @@ class ReleaseGateTests(unittest.TestCase):
     def test_tag_command_is_candidate_bound(self):
         tags = [line.strip() for line in self.doc.splitlines() if line.strip().startswith("git tag")]
         self.assertEqual(tags, ['git tag -a v0.2.0 "$candidate_sha" -m "Release v0.2.0"'])
-        self.assertEqual(re.search(r"(?m)^candidate_sha=(.+)$", self.doc).group(1), "<exact reviewed candidate commit SHA>")
+        self.assertIn("candidate_sha=2accd83520a5339ad8f549bdcb3579e71b969da0", self.doc)
         self.assertNotIn("trusted_main_sha", tags[0])
     def test_no_go_and_open_issue_gates_are_explicit(self):
         for phrase in ("Missing or invalid ledger", "Existing `v0.2.0` tag", "Wrong Pending Trusted Publisher", "OIDC publication failure", "published files differ from the tag-run receipt"):
@@ -47,6 +49,30 @@ class ReleaseGateTests(unittest.TestCase):
         self.assertIn("git show \"$trusted_main_sha:release/ledger.json\"", self.doc)
         self.assertIn("candidate to be an ancestor of `trusted_main_sha`", self.doc)
         self.assertNotIn("release/0.1.0.md", self.doc)
+
+    def test_candidate_merge_boundary_is_explicit_and_fail_closed(self):
+        for phrase in (
+            "candidate_sha=2accd83520a5339ad8f549bdcb3579e71b969da0",
+            'git merge --no-ff "$candidate_sha" -m "Merge release/prepare-0.2.0"',
+            'git merge-base --is-ancestor "$candidate_sha" "$merge_sha"',
+            'test "$#" -eq 2',
+            'test "$2" = "$candidate_sha"',
+            'test "$trusted_main_sha" != "$merge_sha"',
+            'git merge-base --is-ancestor "$merge_sha" "$trusted_main_sha"',
+        ):
+            self.assertIn(phrase, self.doc)
+        self.assertRegex(self.doc, r"Do\s+not squash, rebase, or use a synthetic merge\.")
+        self.assertIn("git show \"$trusted_main_sha:release/ledger.json\"", self.doc)
+        self.assertIn('${MERGE_SHA:?set MERGE_SHA to the exact verified two-parent merge commit SHA}', self.doc)
+        self.assertIn("git rev-parse \"$merge_sha:release/ledger.json\"", self.doc)
+
+    def test_historical_010_status_is_not_stale(self):
+        self.assertIn("historical release record", self.historical_doc)
+        self.assertIn("0.1.0` was published to PyPI", self.historical_doc)
+        self.assertIn("GitHub Release for `v0.1.0` exists", self.historical_doc)
+        self.assertNotIn("0.1.0` is not published to PyPI", self.historical_doc)
+        self.assertNotIn("The package is not published yet.", self.historical_doc)
+        self.assertNotIn("Release Notes (Not Yet Published)", self.historical_doc)
     def test_protected_workflow_matches_approved_base_bytes(self):
         lf = WORKFLOW.read_bytes().replace(b"\r\n", b"\n")
         for candidate in (lf, lf.replace(b"\n", b"\r\n")):
