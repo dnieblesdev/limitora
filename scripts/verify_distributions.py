@@ -17,7 +17,7 @@ import sys
 import tarfile
 import zipfile
 from packaging.requirements import Requirement
-NAME, VERSION, REQUIRES_PYTHON = "limitora", "0.1.0", ">=3.10"
+NAME, VERSION, REQUIRES_PYTHON = "limitora", "0.2.0", ">=3.10"
 ROOT = f"{NAME}-{VERSION}"
 DIST_INFO = f"{ROOT}.dist-info"
 SOURCE_FILES = tuple(f"src/limitora/{name}" for name in (
