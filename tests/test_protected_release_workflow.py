@@ -229,15 +229,15 @@ class ProtectedReleaseContractTests(unittest.TestCase):
         self.assertTrue(SHA.fullmatch("a" * 40))
         for candidate in ("", "a" * 39, "g" * 40, "a" * 41):
             self.assertIsNone(SHA.fullmatch(candidate))
-        valid = {"schema_version": 1, "version": "0.1.0", "source_sha": "a" * 40}
+        valid = {"schema_version": 1, "version": "0.2.0", "source_sha": "a" * 40}
         for ledger in ({}, {**valid, "version": "9.9.9"}, {**valid, "source_sha": "b" * 40}, {**valid, "schema_version": 2}):
-            self.assertFalse(ledger.get("schema_version") == 1 and ledger.get("version") == "0.1.0" and ledger.get("source_sha") == "a" * 40)
+            self.assertFalse(ledger.get("schema_version") == 1 and ledger.get("version") == "0.2.0" and ledger.get("source_sha") == "a" * 40)
     def test_identity_fixture_rejects_tag_and_checkout_substitution(self):
         sha = "a" * 40
         trusted = "b" * 40
-        valid = (sha, "v0.1.0", True, "0.1.0", "0.1.0", sha, trusted, True, sha, (1, "0.1.0", sha))
+        valid = (sha, "v0.2.0", True, "0.2.0", "0.2.0", sha, trusted, True, sha, (1, "0.2.0", sha))
         self.assertTrue(accepts_identity(*valid))
-        for mutation in ((sha[:39], *valid[1:]), (sha, "v0.1", *valid[2:]), (sha, "v9.9.9", *valid[2:]), (sha, "v0.1.0", False, *valid[3:]), (sha, "v0.1.0", True, "0.1.0", "0.1.0", "c" * 40, trusted, True, sha, valid[9]), (sha, "v0.1.0", True, "0.1.0", "0.1.0", sha, sha, True, sha, valid[9]), (sha, "v0.1.0", True, "0.1.0", "0.1.0", sha, trusted, False, sha, valid[9]), (sha, "v0.1.0", True, "0.1.0", "0.1.0", sha, trusted, True, "c" * 40, valid[9]), (sha, "v0.1.0", True, "0.1.0", "0.1.0", sha, trusted, True, sha, (1, "0.1.0", trusted))):
+        for mutation in ((sha[:39], *valid[1:]), (sha, "v0.1", *valid[2:]), (sha, "v9.9.9", *valid[2:]), (sha, "v0.2.0", False, *valid[3:]), (sha, "v0.2.0", True, "0.2.0", "0.2.0", "c" * 40, trusted, True, sha, valid[9]), (sha, "v0.2.0", True, "0.2.0", "0.2.0", sha, sha, True, sha, valid[9]), (sha, "v0.2.0", True, "0.2.0", "0.2.0", sha, trusted, False, sha, valid[9]), (sha, "v0.2.0", True, "0.2.0", "0.2.0", sha, trusted, True, "c" * 40, valid[9]), (sha, "v0.2.0", True, "0.2.0", "0.2.0", sha, trusted, True, sha, (1, "0.2.0", trusted))):
             self.assertFalse(accepts_identity(*mutation))
     def test_artifact_fixture_rejects_id_digest_manifest_and_hash_substitution(self):
         valid = ("8633349610", "sha256:artifact", "manifest", "wheel", "sdist")
