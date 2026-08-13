@@ -32,7 +32,8 @@ class ReleaseGateTests(unittest.TestCase):
     def test_tag_command_is_candidate_bound(self):
         tags = [line.strip() for line in self.doc.splitlines() if line.strip().startswith("git tag")]
         self.assertEqual(tags, ['git tag -a v0.2.0 "$candidate_sha" -m "Release v0.2.0"'])
-        self.assertIn("candidate_sha=2accd83520a5339ad8f549bdcb3579e71b969da0", self.doc)
+        self.assertIn('candidate_sha="$MERGE_SHA"', self.doc)
+        self.assertNotRegex(self.doc, r"(?<![0-9a-f])[0-9a-f]{40}(?![0-9a-f])")
         self.assertNotIn("trusted_main_sha", tags[0])
     def test_no_go_and_open_issue_gates_are_explicit(self):
         for phrase in ("Missing or invalid ledger", "Existing `v0.2.0` tag", "Wrong Pending Trusted Publisher", "OIDC publication failure", "published files differ from the tag-run receipt"):
@@ -43,8 +44,8 @@ class ReleaseGateTests(unittest.TestCase):
         self.assertIn("GitHub Release does not yet exist", self.doc)
     def test_candidate_and_ledger_handoff_are_explicit(self):
         self.assertIn("ledger is intentionally a preparation anchor", self.doc)
-        self.assertIn("must be rewritten on the later trusted-main", self.doc)
-        self.assertIn("exact reviewed candidate SHA", self.doc)
+        self.assertIn("must then be rewritten in a\nseparate, later trusted-main ledger-only commit `T`", self.doc)
+        self.assertIn("exact two-parent merge commit is `M`", self.doc)
         self.assertIn("Do not tag", self.doc)
         self.assertIn("git show \"$trusted_main_sha:release/ledger.json\"", self.doc)
         self.assertIn("candidate to be an ancestor of `trusted_main_sha`", self.doc)
@@ -52,19 +53,32 @@ class ReleaseGateTests(unittest.TestCase):
 
     def test_candidate_merge_boundary_is_explicit_and_fail_closed(self):
         for phrase in (
-            "candidate_sha=2accd83520a5339ad8f549bdcb3579e71b969da0",
-            'git merge --no-ff "$candidate_sha" -m "Merge release/prepare-0.2.0"',
-            'git merge-base --is-ancestor "$candidate_sha" "$merge_sha"',
-            'test "$#" -eq 2',
-            'test "$2" = "$candidate_sha"',
+            'test "$(gh pr view 53 --json state --jq \'.state\')" = OPEN',
+            "git fetch origin main",
+            "base_sha=$(git rev-parse HEAD)",
+            "pr_head_sha=$(gh pr view 53 --json headRefOid --jq '.headRefOid')",
+            "git fetch origin pull/53/head",
+            'test "$(git rev-parse FETCH_HEAD)" = "$pr_head_sha"',
+            'git merge --no-ff "$pr_head_sha" -m "Merge pull request #53"',
+            'test "$merge_sha" != "$pr_head_sha"',
+            'parents=($(git show -s --format=%P "$merge_sha"))',
+            'test "${#parents[@]}" -eq 2',
+            'test "${parents[0]}" = "$base_sha"',
+            'test "${parents[1]}" = "$pr_head_sha"',
+            'git merge-base --is-ancestor "$pr_head_sha" "$merge_sha"',
+            'git show "$merge_sha:pyproject.toml" | grep -Fx \'version = "0.2.0"\'',
             'test "$trusted_main_sha" != "$merge_sha"',
             'git merge-base --is-ancestor "$merge_sha" "$trusted_main_sha"',
+            'test "$(git rev-parse "$trusted_main_sha^")" = "$merge_sha"',
+            'git diff-tree --no-commit-id --name-only -r "$trusted_main_sha"',
+            'test "$(git rev-parse "$merge_sha:release/ledger.json")" != "$(git rev-parse "$trusted_main_sha:release/ledger.json")"',
         ):
             self.assertIn(phrase, self.doc)
         self.assertRegex(self.doc, r"Do\s+not squash, rebase, or use a synthetic merge\.")
         self.assertIn("git show \"$trusted_main_sha:release/ledger.json\"", self.doc)
         self.assertIn('${MERGE_SHA:?set MERGE_SHA to the exact verified two-parent merge commit SHA}', self.doc)
-        self.assertIn("git rev-parse \"$merge_sha:release/ledger.json\"", self.doc)
+        self.assertIn('"source_sha": sys.argv[1]', self.doc)
+        self.assertNotRegex(self.doc, r"(?<![0-9a-f])[0-9a-f]{40}(?![0-9a-f])")
 
     def test_historical_010_status_is_not_stale(self):
         self.assertIn("historical release record", self.historical_doc)
