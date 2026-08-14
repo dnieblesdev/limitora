@@ -101,6 +101,15 @@ class OpenCodeGoProvider(ProviderReader):
             return None
         if reset_at.tzinfo is None or reset_at.utcoffset() is None:
             return None
+        if status == "rate-limited":
+            return QuotaWindow(
+                kind,
+                "account",
+                period,
+                None,
+                ValueAvailability.RATE_LIMITED,
+                self.SOURCE,
+            )
         used = Decimal(str(usage))
         limit = Decimal("100")
         return QuotaWindow(kind, "account", period, None, ValueAvailability.KNOWN, self.SOURCE,

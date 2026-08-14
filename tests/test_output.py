@@ -203,6 +203,23 @@ class ResetCreditProjectionTests(unittest.TestCase):
 class WindowNullableScalarTests(unittest.TestCase):
     """Nullable scalars on a window appear as null, not omitted."""
 
+    def test_rate_limited_window_exposes_typed_status_without_numeric_fields(self) -> None:
+        window = QuotaWindow(
+            kind=WindowKind.COMMERCIAL_QUOTA,
+            scope="account",
+            period="weekly",
+            plan_id=None,
+            availability=ValueAvailability.RATE_LIMITED,
+            source=SourceMetadata("opencode-go-api"),
+        )
+
+        parsed = json.loads(render_json(snapshot(windows=(window,))))
+
+        self.assertEqual("rate_limited", parsed["quota_windows"][0]["availability"])
+        for field in ("limit", "used", "remaining", "reset_at"):
+            with self.subTest(field=field):
+                self.assertIsNone(parsed["quota_windows"][0][field])
+
     def test_window_with_all_nullable_fields_serializes_every_nullable_field_as_null(self) -> None:
         window = QuotaWindow(
             kind=WindowKind.OTHER,
