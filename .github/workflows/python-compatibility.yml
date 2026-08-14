@@ -143,14 +143,14 @@ jobs:
               "$env_dir/bin/python" -m pip install --no-index --no-build-isolation --no-deps --find-links "$wheelhouse" "$artifact"
             fi
             cli="$env_dir/bin/limitora"
-            env -u PYTHONPATH -u PYTHONHOME PYTHONNOUSERSITE=1 "$env_dir/bin/python" -I "$bundle/smoke.py" --artifact "$artifact" --manifest "$bundle/manifest.sha256" --source-sha "$bundle/source-sha.txt" --expected-source-sha "$CANONICAL_SOURCE_SHA" --expected-version 0.2.0 --checkout "$repo" --wheelhouse "$wheelhouse" --cli "$cli" --installation "$kind"
+            env -u PYTHONPATH -u PYTHONHOME PYTHONNOUSERSITE=1 "$env_dir/bin/python" -I "$bundle/smoke.py" --artifact "$artifact" --manifest "$bundle/manifest.sha256" --source-sha "$bundle/source-sha.txt" --expected-source-sha "$CANONICAL_SOURCE_SHA" --expected-version 0.3.0 --checkout "$repo" --wheelhouse "$wheelhouse" --cli "$cli" --installation "$kind"
             if [ "$kind" = sdist ]; then
               "$env_dir/bin/python" -m pip install --no-index --no-build-isolation --find-links "$wheelhouse" "${artifact}[opencode-go]"
             else
               "$env_dir/bin/python" -m pip install --no-index --find-links "$wheelhouse" "${artifact}[opencode-go]"
             fi
             "$env_dir/bin/python" -m pip check
-            env -u PYTHONPATH -u PYTHONHOME PYTHONNOUSERSITE=1 "$env_dir/bin/python" -I "$bundle/smoke.py" --artifact "$artifact" --manifest "$bundle/manifest.sha256" --source-sha "$bundle/source-sha.txt" --expected-source-sha "$CANONICAL_SOURCE_SHA" --expected-version 0.2.0 --checkout "$repo" --wheelhouse "$wheelhouse" --cli "$cli" --installation "$kind" --require-opencode-dependency
+            env -u PYTHONPATH -u PYTHONHOME PYTHONNOUSERSITE=1 "$env_dir/bin/python" -I "$bundle/smoke.py" --artifact "$artifact" --manifest "$bundle/manifest.sha256" --source-sha "$bundle/source-sha.txt" --expected-source-sha "$CANONICAL_SOURCE_SHA" --expected-version 0.3.0 --checkout "$repo" --wheelhouse "$wheelhouse" --cli "$cli" --installation "$kind" --require-opencode-dependency
           }
           run_smoke wheel "$wheel"
           run_smoke sdist "$sdist"
@@ -184,14 +184,14 @@ jobs:
               & $python -m pip install --no-index --no-build-isolation --no-deps --find-links $wheelhouse $artifact
             }
             $cli = Join-Path $envDir "Scripts\limitora.exe"
-            & $python -I "$bundle\smoke.py" --artifact $artifact --manifest "$bundle\manifest.sha256" --source-sha "$bundle\source-sha.txt" --expected-source-sha $env:CANONICAL_SOURCE_SHA --expected-version 0.2.0 --checkout $repo --wheelhouse $wheelhouse --cli $cli --installation $kind
+            & $python -I "$bundle\smoke.py" --artifact $artifact --manifest "$bundle\manifest.sha256" --source-sha "$bundle\source-sha.txt" --expected-source-sha $env:CANONICAL_SOURCE_SHA --expected-version 0.3.0 --checkout $repo --wheelhouse $wheelhouse --cli $cli --installation $kind
             if ($kind -eq "sdist") {
               & $python -m pip install --no-index --no-build-isolation --find-links $wheelhouse "${artifact}[opencode-go]"
             } else {
               & $python -m pip install --no-index --find-links $wheelhouse "${artifact}[opencode-go]"
             }
             & $python -m pip check
-            & $python -I "$bundle\smoke.py" --artifact $artifact --manifest "$bundle\manifest.sha256" --source-sha "$bundle\source-sha.txt" --expected-source-sha $env:CANONICAL_SOURCE_SHA --expected-version 0.2.0 --checkout $repo --wheelhouse $wheelhouse --cli $cli --installation $kind --require-opencode-dependency
+            & $python -I "$bundle\smoke.py" --artifact $artifact --manifest "$bundle\manifest.sha256" --source-sha "$bundle\source-sha.txt" --expected-source-sha $env:CANONICAL_SOURCE_SHA --expected-version 0.3.0 --checkout $repo --wheelhouse $wheelhouse --cli $cli --installation $kind --require-opencode-dependency
           }
           Invoke-Smoke "wheel" $wheel
           Invoke-Smoke "sdist" $sdist

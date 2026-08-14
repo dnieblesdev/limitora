@@ -2,7 +2,7 @@
 
 Limitora is a typed Python library for provider-agnostic quota and status observations. It keeps provider adapters, composition, caching, output projection, and the CLI behind explicit boundaries so scripts and small tools can inspect status without embedding UI logic or leaking secrets.
 
-> **Current status**: `0.1.0` is the published baseline. The current source tree prepares `0.2.0` with the typed public API, deterministic output projections, a provider-aware `limitora status` CLI, Codex JSONL support, and opt-in OpenCode Go support. `0.2.0` is not published yet.
+> **Current status**: `0.2.0` is the published baseline. The current source tree prepares `0.3.0` with the typed public API, deterministic output projections, a provider-aware `limitora status` CLI, Codex JSONL support, opt-in OpenCode Go support, and the additive `ValueAvailability.RATE_LIMITED` state. `0.3.0` is not published yet.
 
 Supported CPython versions are 3.10 through 3.14. A newer minor is not claimed until CI covers it; an upper bound requires a reproduced incompatibility.
 
