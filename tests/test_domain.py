@@ -155,6 +155,31 @@ class DomainModelTests(unittest.TestCase):
         self.assertIsNone(unknown.remaining_percentage)
         self.assertIsNone(unlimited.remaining_percentage)
 
+    def test_rate_limited_windows_are_excluded_from_remaining_aggregation(self) -> None:
+        window = QuotaWindow(
+            kind=WindowKind.COMMERCIAL_QUOTA,
+            scope="account",
+            period="weekly",
+            plan_id=None,
+            availability=ValueAvailability.RATE_LIMITED,
+            source=OPENCODE_GO_SOURCE,
+        )
+
+        result = aggregate_remaining_percentages(
+            (snapshot("opencode-go", window),),
+            kind=WindowKind.COMMERCIAL_QUOTA,
+            scope="account",
+            period="weekly",
+            plan_id=None,
+            unit="percentage_points",
+            now=NOW,
+            maximum_age=timedelta(minutes=5),
+        )
+
+        self.assertIsNone(result.remaining_percentage)
+        self.assertEqual((), result.included_provider_ids)
+        self.assertEqual((ExclusionReason.ABSENT,), tuple(exclusion.reason for exclusion in result.exclusions))
+
     def test_rejects_invalid_percentage_and_incompatible_quantities(self) -> None:
         with self.assertRaises(ValueError):
             Percentage(Decimal("100.01"))

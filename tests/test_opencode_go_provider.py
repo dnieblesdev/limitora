@@ -41,14 +41,40 @@ class OpenCodeGoProviderTests(unittest.TestCase):
         self.assertEqual(ProviderState.AVAILABLE, snapshot.status.state)
         self.assertEqual(NOW, snapshot.fetched_at)
         self.assertEqual(("five_hour", "weekly", "monthly"), tuple(w.period for w in snapshot.quota_windows))
-        self.assertTrue(all(w.plan_id is None and w.reset_at > NOW for w in snapshot.quota_windows))
+        self.assertTrue(all(w.plan_id is None for w in snapshot.quota_windows))
+        self.assertEqual(
+            (ValueAvailability.KNOWN, ValueAvailability.RATE_LIMITED, ValueAvailability.KNOWN),
+            tuple(w.availability for w in snapshot.quota_windows),
+        )
+        self.assertEqual(
+            (NOW + timedelta(seconds=10), None, NOW + timedelta(seconds=30)),
+            tuple(w.reset_at for w in snapshot.quota_windows),
+        )
         self.assertEqual(Decimal("75"), snapshot.quota_windows[0].remaining.value)
+
+    def test_maps_rate_limited_window_to_typed_non_numeric_availability(self):
+        body = b'{"usage":{"rolling":{"status":"rate-limited","percent":25,"resetsAt":"2026-07-18T12:00:10Z"}}}'
+
+        snapshot = self.provider(HttpResponse(200, body)).fetch(self.request())
+        window = snapshot.quota_windows[0]
+
+        self.assertEqual(ValueAvailability.RATE_LIMITED, window.availability)
+        self.assertIsNone(window.limit)
+        self.assertIsNone(window.used)
+        self.assertIsNone(window.remaining)
+        self.assertIsNone(window.reset_at)
+        self.assertIsNone(window.remaining_percentage)
 
     def test_invalid_sibling_is_partial_and_no_valid_window_is_parse_failure(self):
         body = b'{"usage":{"rolling":{"status":"ok","percent":25,"resetsAt":"2026-07-18T12:00:10Z"},"weekly":{"status":"ok","percent":101,"resetsAt":"2026-07-18T12:00:20Z"}}}'
         result = self.provider(HttpResponse(200, body)).fetch(self.request())
         self.assertEqual(ProviderState.PARTIAL, result.status.state)
         self.assertEqual(("five_hour",), tuple(w.period for w in result.quota_windows))
+
+        invalid_rate_limited = b'{"usage":{"rolling":{"status":"rate-limited","percent":101,"resetsAt":"2026-07-18T12:00:10Z"},"weekly":{"status":"ok","percent":50,"resetsAt":"2026-07-18T12:00:20Z"}}}'
+        result = self.provider(HttpResponse(200, invalid_rate_limited)).fetch(self.request())
+        self.assertEqual(ProviderState.PARTIAL, result.status.state)
+        self.assertEqual(("weekly",), tuple(w.period for w in result.quota_windows))
 
         with self.assertRaises(ProviderError) as raised:
             self.provider(HttpResponse(200, b'{"usage":{"weekly":{}}}')).fetch(self.request())

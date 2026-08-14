@@ -20,6 +20,7 @@ class ProviderState(str, Enum):
 
 class ValueAvailability(str, Enum):
     KNOWN = "known"
+    RATE_LIMITED = "rate_limited"
     UNLIMITED = "unlimited"
     DISABLED = "disabled"
     UNAVAILABLE = "unavailable"
