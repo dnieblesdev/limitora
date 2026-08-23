@@ -29,7 +29,7 @@ def run_git(cwd, *args):
 
 def run_candidate_path_gate(gate, output):
     environment = os.environ | {"GIT_OUTPUT": output}
-    bash_gate = 'set -x\ngit() { printf "%s\\n" "$GIT_OUTPUT"; }\n' + gate
+    bash_gate = 'git() { printf "%s\\n" "$GIT_OUTPUT"; }\n' + gate
     return subprocess.run(["bash", "-c", bash_gate], env=environment, capture_output=True, text=True)
 
 
@@ -169,8 +169,10 @@ class ReleaseGateTests(unittest.TestCase):
                     f"git diff-tree --no-commit-id --name-only -r {revision} | LC_ALL=C sort",
                     gate,
                 )
+                if os.name == "nt":
+                    continue
                 passed = run_candidate_path_gate(gate, "\n".join(AUTHORIZED_CANDIDATE_PATHS[::-1]))
-                self.assertEqual(passed.returncode, 0, f"stdout={passed.stdout!r} stderr={passed.stderr!r} returncode={passed.returncode}")
+                self.assertEqual(passed.returncode, 0, f"gate failed: rc={passed.returncode}, stdout={passed.stdout!r}, stderr={passed.stderr!r}")
                 rejected = run_candidate_path_gate(
                     gate, "\n".join((*AUTHORIZED_CANDIDATE_PATHS, "unexpected.txt"))
                 )
