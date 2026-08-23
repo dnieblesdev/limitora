@@ -92,10 +92,11 @@ def build_notification(method: str, params: dict) -> bytes:
     return json.dumps(payload, separators=(",", ":")).encode("utf-8") + b"\n"
 
 
-# Envelope keys accepted on inbound frames. ``jsonrpc`` is accepted for
+# Correlated responses have a strict envelope. ``jsonrpc`` is accepted for
 # tolerance with the standard JSON-RPC 2.0 wire format; the spec forbids
-# it on outbound, not on inbound.
-_INBOUND_KEYS = frozenset({"id", "method", "params", "result", "error", "jsonrpc"})
+# it on outbound, not on inbound. Notifications use structural validation
+# instead, so additive provider metadata remains forward-compatible.
+_RESPONSE_KEYS = frozenset({"id", "result", "error", "jsonrpc"})
 
 
 def parse_frame(line: bytes) -> _ParsedFrame:
@@ -106,15 +107,16 @@ def parse_frame(line: bytes) -> _ParsedFrame:
         * :class:`_ParsedFrame` with ``ident`` set to ``int`` for a
           correlated response (exactly one of ``result`` or ``error``).
         * :class:`_ParsedFrame` with ``ident`` set to ``None`` for a
-          server-pushed notification (``method`` present, no ``id``,
-          no ``result``/``error``).
+          server-pushed notification (non-empty string ``method`` present,
+          no ``id``, and no ``result``/``error``). Additive notification
+          metadata is discarded.
 
     Raises:
         _CodexJsonlFailure: with kind ``PROTOCOL`` for malformed JSON,
-            non-object envelopes, unknown envelope keys, wrong shape
-            (both/neither of ``result`` and ``error``), or wrong types
-            (``id`` not int, ``result``/``error`` not dict, ``method``
-            absent on a frame without ``id``).
+            non-object envelopes, unsupported correlated-response keys,
+            wrong shape (both/neither of ``result`` and ``error``), or wrong
+            types (``id`` not int, ``result``/``error`` not dict, or
+            ``method`` absent/non-string/empty on a notification).
     """
     try:
         envelope = json.loads(line.decode("utf-8"))
@@ -122,10 +124,9 @@ def parse_frame(line: bytes) -> _ParsedFrame:
         raise _CodexJsonlFailure(_CodexJsonlFailureKind.PROTOCOL) from None
     if not isinstance(envelope, dict):
         raise _CodexJsonlFailure(_CodexJsonlFailureKind.PROTOCOL)
-    extra_keys = set(envelope) - _INBOUND_KEYS
-    if extra_keys:
-        raise _CodexJsonlFailure(_CodexJsonlFailureKind.PROTOCOL)
     if "id" in envelope:
+        if set(envelope) - _RESPONSE_KEYS:
+            raise _CodexJsonlFailure(_CodexJsonlFailureKind.PROTOCOL)
         ident = envelope["id"]
         if not isinstance(ident, int) or isinstance(ident, bool):
             raise _CodexJsonlFailure(_CodexJsonlFailureKind.PROTOCOL)
@@ -144,6 +145,12 @@ def parse_frame(line: bytes) -> _ParsedFrame:
         return _ParsedFrame(ident=ident, result=result, error=None)
     # No ``id`` => notification. Must carry ``method`` and must not
     # carry ``result``/``error`` (notifications are not responses).
-    if "method" not in envelope or "result" in envelope or "error" in envelope:
+    method = envelope.get("method")
+    if (
+        not isinstance(method, str)
+        or not method
+        or "result" in envelope
+        or "error" in envelope
+    ):
         raise _CodexJsonlFailure(_CodexJsonlFailureKind.PROTOCOL)
     return _ParsedFrame(ident=None, result=None, error=None)

@@ -49,7 +49,7 @@ public surface (``_CodexJsonlSession``, ``_CodexSessionSpec``,
 | Layer | Owns | Module |
 |---|---|---|
 | Transport | ``subprocess.Popen`` start, bounded worker/queue read I/O, deadline enforcement, byte-cap, terminate/kill/close/join cleanup | ``_codex_jsonl_transport.py`` |
-| Protocol | JSON-RPC envelope build and parse. **No I/O.** | ``_codex_jsonl_protocol.py`` |
+| Protocol | JSON-RPC envelope build and parse, with a strict correlated-response envelope and structural notification validation. **No I/O.** | ``_codex_jsonl_protocol.py`` |
 | Mapping | Request ``id`` correlation, notification skipping, error-code → failure-kind lookup, session orchestration | ``_codex_jsonl.py`` |
 
 ## Outbound frame shapes
@@ -104,6 +104,18 @@ Every inbound frame is decoded by
 | ``int`` | ``None`` | ``dict`` | Correlated error response — mapped via the error-code table below |
 | ``None`` | ``None`` | ``None`` | Server-pushed notification — silently skipped |
 | — | other shape | other shape | ``PROTOCOL`` |
+
+An object without ``id`` is skippable only when it has a non-empty string
+``method`` and has neither ``result`` nor ``error``. Such a notification may
+carry arbitrary additive top-level metadata, including fields such as
+``emittedAtMs``; the protocol layer discards that metadata and it never reaches
+the public output. A notification with an empty or non-string ``method``, or
+with ``result``/``error``, is malformed and raises ``PROTOCOL``.
+
+Correlated responses are strict: ``id`` must be an integer (not a boolean),
+exactly one of ``result`` or ``error`` must be a dictionary, and notification
+fields (``method``/``params``) plus unrelated top-level metadata are rejected.
+The supported ``jsonrpc`` envelope key remains accepted on inbound responses.
 
 ### Examples
 

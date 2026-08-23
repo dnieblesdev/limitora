@@ -171,6 +171,30 @@ class MappingSessionContractTests(unittest.TestCase):
         session, spec = self.session(process)
         self.assertEqual({"rateLimits": {}}, session.exchange(spec))
 
+    def test_metadata_notification_between_responses_is_skipped(self):
+        process = ScriptedProcess(reads=[
+            ok(1, {}),
+            line({
+                "method": "server/status",
+                "params": {"state": "ready"},
+                "emittedAtMs": 1730000000000,
+                "trace": {"request": "private"},
+            }),
+            ok(2, {"rateLimits": {"primary": {"used_percent": 3}}}),
+        ])
+        session, spec = self.session(process)
+        self.assertEqual(
+            {"rateLimits": {"primary": {"used_percent": 3}}},
+            session.exchange(spec),
+        )
+
+    def test_correlated_error_response_is_not_skipped(self):
+        process = ScriptedProcess(reads=[ok(1, {}), err(2, 429)])
+        session, spec = self.session(process)
+        with self.assertRaises(_CodexJsonlFailure) as raised:
+            session.exchange(spec)
+        self.assertEqual(_CodexJsonlFailureKind.RATE_LIMITED, raised.exception.kind)
+
     def test_multiple_notifications_in_same_buffer_are_all_skipped(self):
         process = ScriptedProcess(reads=[
             notification("server/event1"),

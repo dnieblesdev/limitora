@@ -97,6 +97,45 @@ class ParseFrameTests(unittest.TestCase):
         frame = parse_frame(b'{"jsonrpc":"2.0","method":"serverNotification","params":{}}\n')
         self.assertEqual(_ParsedFrame(ident=None, result=None, error=None), frame)
 
+    def test_parse_frame_notification_discards_arbitrary_additive_metadata(self):
+        wire = (
+            b'{"method":"serverNotification","params":{},'
+            b'"emittedAtMs":1730000000000,"trace":{"request":"private"},"flag":true}\n'
+        )
+        frame = parse_frame(wire)
+        self.assertEqual(_ParsedFrame(ident=None, result=None, error=None), frame)
+
+    def test_parse_frame_notification_requires_non_empty_string_method(self):
+        cases = (
+            b'{}\n',
+            b'{"method":""}\n',
+            b'{"method":7}\n',
+            b'{"method":"serverNotification","result":{}}\n',
+            b'{"method":"serverNotification","error":{}}\n',
+        )
+        for wire in cases:
+            with self.subTest(wire=wire):
+                with self.assertRaises(_CodexJsonlFailure) as raised:
+                    parse_frame(wire)
+                self.assertEqual(_CodexJsonlFailureKind.PROTOCOL, raised.exception.kind)
+
+    def test_parse_frame_correlated_response_accepts_supported_jsonrpc_key(self):
+        frame = parse_frame(b'{"jsonrpc":"2.0","id":3,"result":{}}\n')
+        self.assertEqual(_ParsedFrame(ident=3, result={}, error=None), frame)
+
+    def test_parse_frame_correlated_response_rejects_notification_and_unknown_fields(self):
+        cases = (
+            b'{"id":1,"result":{},"method":"serverNotification"}\n',
+            b'{"id":1,"result":{},"params":{}}\n',
+            b'{"id":1,"result":{},"emittedAtMs":1730000000000}\n',
+            b'{"id":1,"error":{"code":2},"metadata":true}\n',
+        )
+        for wire in cases:
+            with self.subTest(wire=wire):
+                with self.assertRaises(_CodexJsonlFailure) as raised:
+                    parse_frame(wire)
+                self.assertEqual(_CodexJsonlFailureKind.PROTOCOL, raised.exception.kind)
+
     def test_parse_frame_error_response_yields_error_dict(self):
         frame = parse_frame(b'{"id":1,"error":{"code":401,"message":"token=secret"}}\n')
         self.assertEqual(_ParsedFrame(ident=1, result=None, error={"code": 401, "message": "token=secret"}), frame)
@@ -133,10 +172,11 @@ class ParseFrameTests(unittest.TestCase):
         self.assertEqual(_CodexJsonlFailureKind.PROTOCOL, raised.exception.kind)
 
     def test_parse_frame_non_int_id_raises_protocol(self):
-        wire = b'{"id":"1","result":{}}\n'
-        with self.assertRaises(_CodexJsonlFailure) as raised:
-            parse_frame(wire)
-        self.assertEqual(_CodexJsonlFailureKind.PROTOCOL, raised.exception.kind)
+        for wire in (b'{"id":"1","result":{}}\n', b'{"id":true,"result":{}}\n'):
+            with self.subTest(wire=wire):
+                with self.assertRaises(_CodexJsonlFailure) as raised:
+                    parse_frame(wire)
+                self.assertEqual(_CodexJsonlFailureKind.PROTOCOL, raised.exception.kind)
 
     def test_parse_frame_non_dict_result_raises_protocol(self):
         wire = b'{"id":1,"result":"scalar"}\n'
