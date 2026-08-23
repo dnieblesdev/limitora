@@ -65,12 +65,28 @@ class ReleaseGateTests(unittest.TestCase):
             self.assertIn(value, self.doc)
     def test_tag_command_is_candidate_bound(self):
         tags = [line.strip() for line in self.doc.splitlines() if line.strip().startswith("git tag")]
-        self.assertEqual(tags, ['git tag -a v0.3.1 "$candidate_sha" -m "Release v0.3.1"'])
+        self.assertEqual(tags, ['git tag -a "$TAG_NAME" "$candidate_sha" -m "Release $TAG_NAME"'])
         self.assertIn("candidate-bound annotated tag", self.doc)
         self.assertIn('candidate_sha="$(git log --first-parent -1 --format=%H "$trusted_main_sha" -- release/0.3.1.md)"', self.doc)
         self.assertNotIn("MERGE_SHA", self.doc)
         self.assertNotIn("AUTHORIZATION_HEAD_FILE", self.doc)
         self.assertIn('EXPECTED_BASE_SHA="f665e26c5124afbf0c5c7c7aad495897a0d70176"', self.doc)
+        for phrase in (
+            'tag_object="$(git rev-parse "refs/tags/$TAG_NAME")"', 'test "$(git cat-file -t "$tag_object")" = tag',
+            'test "$(git rev-parse "refs/tags/$TAG_NAME^{}")" = "$candidate_sha"', 'git push origin "refs/tags/$TAG_NAME"',
+            'git ls-remote --tags origin', 'gh run list --workflow protected-release.yml --event push --commit "$candidate_sha"',
+            'gh run view "$tag_run_id" --json workflowName,event,headSha', 'Protected release', 'PREFLIGHT_RUN_ID',
+            'TAG_NAME=v0.3.1 VERSION=0.3.1',
+            'gh run watch "$tag_run_id" --exit-status', 'gh run download "$tag_run_id"', 'build-receipt.json',
+            'wheel="$pypi_dir/limitora-$VERSION-py3-none-any.whl"', 'sdist="$pypi_dir/limitora-$VERSION.tar.gz"',
+            '--only-binary=:all:', '--no-binary=:all:', 'hashlib.sha256(path.read_bytes()).hexdigest() == receipt[key]',
+            'for kind in wheel sdist; do', 'python3 -m venv "$env_dir"', 'installed_artifact_smoke.py',
+            '"$python" -m pip check', 'gh release create "$TAG_NAME" --verify-tag',
+        ):
+            self.assertIn(phrase, self.doc)
+        self.assertNotIn('--branch "$TAG_NAME"', self.doc); self.assertEqual(self.doc.count('TAG_NAME=v0.3.1 VERSION=0.3.1'), 2)
+        for before, after in (("git push origin", "gh run watch"), ("gh run watch", "python3 -m pip download"), ("pip check", "gh release create")):
+            self.assertLess(self.doc.rindex(before), self.doc.rindex(after))
     def test_no_go_and_scope_gates_are_explicit(self):
         for phrase in ("Missing or invalid ledger", "Existing `v0.3.1` tag", "Wrong Pending Trusted Publisher", "OIDC publication failure", "published files differ from the tag-run receipt"):
             self.assertIn(phrase, self.doc)
