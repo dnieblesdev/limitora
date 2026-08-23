@@ -34,7 +34,7 @@ def run_candidate_path_gate(gate, output):
         fake_git.chmod(0o755)
         environment = os.environ | {
             "GIT_OUTPUT": output,
-            "PATH": f"{temporary}:{os.environ['PATH']}",
+            "PATH": os.pathsep.join((temporary, os.environ["PATH"])),
         }
         return subprocess.run(["bash", "-c", gate], env=environment, capture_output=True, text=True)
 
