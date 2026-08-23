@@ -2,7 +2,7 @@ import hashlib, json, re, subprocess, tempfile, unittest
 from pathlib import Path
 ROOT = Path(__file__).parents[1]
 LEDGER = ROOT / "release/ledger.json"
-DOSSIER = ROOT / "release/0.3.0.md"
+DOSSIER = ROOT / "release/0.3.1.md"
 HISTORICAL_020_DOSSIER = ROOT / "release/0.2.0.md"
 HISTORICAL_DOSSIER = ROOT / "release/0.1.0.md"
 WORKFLOW = ROOT / ".github/workflows/protected-release.yml"
@@ -28,37 +28,38 @@ class ReleaseGateTests(unittest.TestCase):
     def test_ledger_is_exact_and_ascii(self):
         self.assertEqual(set(self.ledger), {"schema_version", "version", "source_sha"})
         self.assertEqual(self.ledger["schema_version"], 1)
-        self.assertEqual(self.ledger["version"], "0.3.0")
+        self.assertEqual(self.ledger["version"], "0.3.1")
         self.assertTrue(re.fullmatch(r"[0-9a-f]{40}", self.ledger["source_sha"]))
         self.assertTrue(self.ledger_bytes.endswith(b"\n"))
     def test_version_and_evidence_are_documented(self):
         pyproject = (ROOT / "pyproject.toml").read_text(encoding="ascii")
-        self.assertRegex(pyproject, r'(?m)^version = "0\.3\.0"$')
+        self.assertRegex(pyproject, r'(?m)^version = "0\.3\.1"$')
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("0.2.0` is the published baseline", readme)
         self.assertIn("ValueAvailability.RATE_LIMITED", readme)
-        self.assertIn("0.3.0` is not published yet", readme)
-        for value in ("0.3.0", "v0.3.0", "origin/main", "trusted_main_sha", "candidate_sha"):
+        self.assertIn("0.3.1` is not published yet", readme)
+        for value in ("0.3.1", "v0.3.1", "origin/main", "trusted_main_sha", "candidate_sha", "PR #62", "issue #61"):
             self.assertIn(value, self.doc)
     def test_tag_command_is_candidate_bound(self):
         tags = [line.strip() for line in self.doc.splitlines() if line.strip().startswith("git tag")]
-        self.assertEqual(tags, ['git tag -a v0.3.0 "$candidate_sha" -m "Release v0.3.0"'])
-        self.assertIn('candidate_sha="$(git log --first-parent -1 --format=%H "$trusted_main_sha" -- release/0.3.0.md)"', self.doc)
+        self.assertEqual(tags, ['git tag -a v0.3.1 "$candidate_sha" -m "Release v0.3.1"'])
+        self.assertIn("candidate-bound annotated tag", self.doc)
+        self.assertIn('candidate_sha="$(git log --first-parent -1 --format=%H "$trusted_main_sha" -- release/0.3.1.md)"', self.doc)
         self.assertNotIn("MERGE_SHA", self.doc)
         self.assertNotIn("AUTHORIZATION_HEAD_FILE", self.doc)
-        self.assertIn('EXPECTED_PREPARATION_SHA="3155afefa27f197b2090d149b53ab168a9267d94"', self.doc)
-        self.assertNotIn("trusted_main_sha", tags[0])
+        self.assertIn('EXPECTED_BASE_SHA="f665e26c5124afbf0c5c7c7aad495897a0d70176"', self.doc)
     def test_no_go_and_scope_gates_are_explicit(self):
-        for phrase in ("Missing or invalid ledger", "Existing `v0.3.0` tag", "Wrong Pending Trusted Publisher", "OIDC publication failure", "published files differ from the tag-run receipt"):
+        for phrase in ("Missing or invalid ledger", "Existing `v0.3.1` tag", "Wrong Pending Trusted Publisher", "OIDC publication failure", "published files differ from the tag-run receipt"):
             self.assertIn(phrase, self.doc)
-        self.assertIn("Issue #57 tracks", self.doc)
+        self.assertIn("Issue #63 tracks", self.doc)
+        self.assertIn("PR #62 and issue #61", self.doc)
         self.assertIn("approved preparation work unit", self.doc)
         self.assertIn("not published to PyPI", self.doc)
         self.assertIn("GitHub Release does not yet exist", self.doc)
     def test_candidate_and_ledger_handoff_are_explicit(self):
         self.assertIn("explicit temporary anchor", self.doc)
         self.assertIn("ledger-only trusted-main commit `T`", self.doc)
-        self.assertIn("Exact reviewed correction merge commit `M2`", self.doc)
+        self.assertIn("Exact reviewed release-preparation merge commit `M`", self.doc)
         self.assertIn("Do not tag", self.doc)
         self.assertIn("git show \"$trusted_main_sha:release/ledger.json\"", self.doc)
         self.assertIn("Candidate is not a strict ancestor of trusted main", self.doc)
@@ -66,10 +67,10 @@ class ReleaseGateTests(unittest.TestCase):
 
     def test_candidate_merge_boundary_is_explicit_and_fail_closed(self):
         for phrase in (
-            'BASE_SHA_FILE="${BASE_SHA_FILE:-/tmp/limitora-0.3.0-base-sha}"',
+            'BASE_SHA_FILE="${BASE_SHA_FILE:-/tmp/limitora-0.3.1-base-sha}"',
             'base_sha="$(git rev-parse origin/main^{commit})"',
             'printf \'%s\\n\' "$base_sha" > "$BASE_SHA_FILE"',
-            ': "${PREPARATION_PR:?set PREPARATION_PR to the approved preparation PR number}"',
+            ': "${PREPARATION_PR:?set PREPARATION_PR to the approved release-preparation PR number}"',
             'test -s "$BASE_SHA_FILE"',
             'base_sha="$(cat "$BASE_SHA_FILE")"',
             'test "$(gh pr view "$PREPARATION_PR" --json state --jq \'.state\')" = MERGED',
@@ -79,17 +80,15 @@ class ReleaseGateTests(unittest.TestCase):
             'git fetch origin "pull/$PREPARATION_PR/head"',
             'test "$(git rev-parse FETCH_HEAD)" = "$pr_head_sha"',
             'test "$(git cat-file -t "$merge_sha")" = commit',
-            ': "${AUTHORIZATION_PR:?set AUTHORIZATION_PR to the approved authorization PR number}"',
-            'candidate_sha="$(git log --first-parent -1 --format=%H "$trusted_main_sha" -- release/0.3.0.md)"',
-            'EXPECTED_PREPARATION_SHA="3155afefa27f197b2090d149b53ab168a9267d94"',
-            'test "$candidate_sha" != "$EXPECTED_PREPARATION_SHA"',
+            ': "${AUTHORIZATION_PR:?set AUTHORIZATION_PR to the approved ledger-only PR number}"',
+            'candidate_sha="$(git log --first-parent -1 --format=%H "$trusted_main_sha" -- release/0.3.1.md)"',
+            'EXPECTED_BASE_SHA="f665e26c5124afbf0c5c7c7aad495897a0d70176"',
+            'test "$candidate_sha" != "$trusted_main_sha"',
             'candidate_parents=($(git show -s --format=%P "$candidate_sha"))',
             'test "${#candidate_parents[@]}" -eq 2',
-            'test "${candidate_parents[0]}" = "$EXPECTED_PREPARATION_SHA"',
+            'test "${candidate_parents[0]}" = "$EXPECTED_BASE_SHA"',
             'candidate_paths=($(git diff-tree --no-commit-id --name-only -r "${candidate_parents[0]}" "$candidate_sha"))',
-            'test "${#candidate_paths[@]}" -eq 2',
-            'test "${candidate_paths[0]}" = "release/0.3.0.md"',
-            'test "${candidate_paths[1]}" = "tests/test_release_gate.py"',
+            'test "${#candidate_paths[@]}" -eq 8',
             'test "$(gh pr view "$AUTHORIZATION_PR" --json state --jq \'.state\')" = MERGED',
             'test "$(gh pr view "$AUTHORIZATION_PR" --json baseRefName --jq \'.baseRefName\')" = main',
             'authorization_merge_sha="$(gh pr view "$AUTHORIZATION_PR" --json mergeCommit --jq \'.mergeCommit.oid\')"',
@@ -124,13 +123,12 @@ class ReleaseGateTests(unittest.TestCase):
             ("## Annotated Tag", "## PyPI Verification and GitHub Release"),
         )
         required = (
-            'candidate_sha="$(git log --first-parent -1 --format=%H "$trusted_main_sha" -- release/0.3.0.md)"',
-            'EXPECTED_PREPARATION_SHA="3155afefa27f197b2090d149b53ab168a9267d94"',
+            'candidate_sha="$(git log --first-parent -1 --format=%H "$trusted_main_sha" -- release/0.3.1.md)"',
+            'EXPECTED_BASE_SHA="f665e26c5124afbf0c5c7c7aad495897a0d70176"',
             'candidate_parents=($(git show -s --format=%P "$candidate_sha"))',
-            'test "${candidate_parents[0]}" = "$EXPECTED_PREPARATION_SHA"',
+            'test "${candidate_parents[0]}" = "$EXPECTED_BASE_SHA"',
             'candidate_paths=($(git diff-tree --no-commit-id --name-only -r "${candidate_parents[0]}" "$candidate_sha"))',
-            'test "${candidate_paths[0]}" = "release/0.3.0.md"',
-            'test "${candidate_paths[1]}" = "tests/test_release_gate.py"',
+            'test "${#candidate_paths[@]}" -eq 8',
         )
         for start_heading, end_heading in sections:
             section = self.doc[self.doc.index(start_heading):self.doc.index(end_heading)]
@@ -148,7 +146,7 @@ class ReleaseGateTests(unittest.TestCase):
             run_git(repo, "config", "user.email", "test@example.invalid")
             run_git(repo, "config", "user.name", "Release Gate Test")
             (repo / "release").mkdir()
-            (repo / "release/0.3.0.md").write_text("base dossier\n", encoding="ascii")
+            (repo / "release/0.3.1.md").write_text("base dossier\n", encoding="ascii")
             (repo / "tests").mkdir()
             (repo / "tests/test_release_gate.py").write_text("base test\n", encoding="ascii")
             (repo / "release/ledger.json").write_text(
@@ -159,9 +157,9 @@ class ReleaseGateTests(unittest.TestCase):
             run_git(repo, "commit", "-m", "base")
 
             run_git(repo, "switch", "-c", "preparation")
-            (repo / "release/0.3.0.md").write_text("corrected dossier\n", encoding="ascii")
+            (repo / "release/0.3.1.md").write_text("corrected dossier\n", encoding="ascii")
             (repo / "tests/test_release_gate.py").write_text("corrected test\n", encoding="ascii")
-            run_git(repo, "add", "release/0.3.0.md", "tests/test_release_gate.py")
+            run_git(repo, "add", "release/0.3.1.md", "tests/test_release_gate.py")
             run_git(repo, "commit", "-m", "preparation")
             run_git(repo, "switch", "main")
             run_git(repo, "merge", "--no-ff", "--no-edit", "preparation")
@@ -170,7 +168,7 @@ class ReleaseGateTests(unittest.TestCase):
 
             run_git(repo, "switch", "-c", "authorization")
             (repo / "release/ledger.json").write_text(
-                '{"schema_version": 1, "version": "0.3.0", "source_sha": "merge"}\n',
+                '{"schema_version": 1, "version": "0.3.1", "source_sha": "merge"}\n',
                 encoding="ascii",
             )
             run_git(repo, "add", "release/ledger.json")
@@ -201,7 +199,7 @@ class ReleaseGateTests(unittest.TestCase):
                 "--format=%H",
                 trusted_main_sha,
                 "--",
-                "release/0.3.0.md",
+                "release/0.3.1.md",
             )
             candidate_parents = run_git(repo, "show", "-s", "--format=%P", derived_candidate_sha).split()
             candidate_diff = run_git(
@@ -219,7 +217,7 @@ class ReleaseGateTests(unittest.TestCase):
             self.assertEqual(explicit_diff, ["release/ledger.json"])
             self.assertEqual(derived_candidate_sha, merge_sha)
             self.assertEqual(candidate_parents, [base_sha, run_git(repo, "rev-parse", "preparation")])
-            self.assertEqual(candidate_diff, ["release/0.3.0.md", "tests/test_release_gate.py"])
+            self.assertEqual(candidate_diff, ["release/0.3.1.md", "tests/test_release_gate.py"])
 
     def test_historical_020_status_is_not_stale(self):
         self.assertIn("historical release record", self.historical_020_doc)
