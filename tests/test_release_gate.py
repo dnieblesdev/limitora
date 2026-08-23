@@ -28,15 +28,9 @@ def run_git(cwd, *args):
 
 
 def run_candidate_path_gate(gate, output):
-    with tempfile.TemporaryDirectory() as temporary:
-        fake_git = Path(temporary) / "git"
-        fake_git.write_text("#!/bin/sh\nprintf '%s\\n' \"$GIT_OUTPUT\"\n", encoding="ascii")
-        fake_git.chmod(0o755)
-        environment = os.environ | {
-            "GIT_OUTPUT": output,
-            "PATH": os.pathsep.join((temporary, os.environ["PATH"])),
-        }
-        return subprocess.run(["bash", "-c", gate], env=environment, capture_output=True, text=True)
+    environment = os.environ | {"GIT_OUTPUT": output}
+    bash_gate = 'git() { printf "%s\\n" "$GIT_OUTPUT"; }\n' + gate
+    return subprocess.run(["bash", "-c", bash_gate], env=environment, capture_output=True, text=True)
 
 
 class ReleaseGateTests(unittest.TestCase):
