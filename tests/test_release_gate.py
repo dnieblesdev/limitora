@@ -1,4 +1,4 @@
-import hashlib, json, re, subprocess, tempfile, unittest
+import hashlib, json, os, re, subprocess, tempfile, unittest
 from pathlib import Path
 ROOT = Path(__file__).parents[1]
 LEDGER = ROOT / "release/ledger.json"
@@ -7,6 +7,16 @@ HISTORICAL_020_DOSSIER = ROOT / "release/0.2.0.md"
 HISTORICAL_DOSSIER = ROOT / "release/0.1.0.md"
 WORKFLOW = ROOT / ".github/workflows/protected-release.yml"
 APPROVED_WORKFLOW_SHA256 = "71cced37d53a0f73a6ba8d659aa6cc3a87473da29b494281fab034e1df0599a8"
+AUTHORIZED_CANDIDATE_PATHS = (
+    ".github/workflows/python-compatibility.yml",
+    "README.md",
+    "pyproject.toml",
+    "release/0.3.1.md",
+    "release/ledger.json",
+    "scripts/verify_distributions.py",
+    "tests/test_protected_release_workflow.py",
+    "tests/test_release_gate.py",
+)
 
 def workflow_sha256(data):
     return hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest()
@@ -15,6 +25,19 @@ def run_git(cwd, *args):
     return subprocess.run(
         ["git", *args], cwd=cwd, check=True, capture_output=True, text=True
     ).stdout.strip()
+
+
+def run_candidate_path_gate(gate, output):
+    with tempfile.TemporaryDirectory() as temporary:
+        fake_git = Path(temporary) / "git"
+        fake_git.write_text("#!/bin/sh\nprintf '%s\\n' \"$GIT_OUTPUT\"\n", encoding="ascii")
+        fake_git.chmod(0o755)
+        environment = os.environ | {
+            "GIT_OUTPUT": output,
+            "PATH": f"{temporary}:{os.environ['PATH']}",
+        }
+        return subprocess.run(["bash", "-c", gate], env=environment, capture_output=True, text=True)
+
 
 class ReleaseGateTests(unittest.TestCase):
     @classmethod
@@ -74,6 +97,7 @@ class ReleaseGateTests(unittest.TestCase):
             'test -s "$BASE_SHA_FILE"',
             'base_sha="$(cat "$BASE_SHA_FILE")"',
             'test "$(gh pr view "$PREPARATION_PR" --json state --jq \'.state\')" = MERGED',
+            'test "$(gh pr view "$PREPARATION_PR" --json baseRefName --jq \'.baseRefName\')" = main',
             'pr_head_sha="$(gh pr view "$PREPARATION_PR" --json headRefOid --jq \'.headRefOid\')"',
             'merge_sha="$(gh pr view "$PREPARATION_PR" --json mergeCommit --jq \'.mergeCommit.oid\')"',
             "git fetch origin main",
@@ -87,8 +111,10 @@ class ReleaseGateTests(unittest.TestCase):
             'candidate_parents=($(git show -s --format=%P "$candidate_sha"))',
             'test "${#candidate_parents[@]}" -eq 2',
             'test "${candidate_parents[0]}" = "$EXPECTED_BASE_SHA"',
-            'candidate_paths=($(git diff-tree --no-commit-id --name-only -r "${candidate_parents[0]}" "$candidate_sha"))',
-            'test "${#candidate_paths[@]}" -eq 8',
+            'candidate_paths=$(',
+            'git diff-tree --no-commit-id --name-only',
+            '| LC_ALL=C sort',
+            'test "$candidate_paths" = "$authorized_candidate_paths"',
             'test "$(gh pr view "$AUTHORIZATION_PR" --json state --jq \'.state\')" = MERGED',
             'test "$(gh pr view "$AUTHORIZATION_PR" --json baseRefName --jq \'.baseRefName\')" = main',
             'authorization_merge_sha="$(gh pr view "$AUTHORIZATION_PR" --json mergeCommit --jq \'.mergeCommit.oid\')"',
@@ -116,28 +142,31 @@ class ReleaseGateTests(unittest.TestCase):
             self.doc.index('base_sha="$(cat "$BASE_SHA_FILE")"'),
         )
 
-    def test_bounded_candidate_contract_is_bash_in_all_operational_blocks(self):
+    def test_candidate_path_checks_are_exact_and_order_normalized(self):
         sections = (
-            ("## Ledger Authorization Boundary", "## Protected Preflight"),
-            ("## Protected Preflight", "## Annotated Tag"),
-            ("## Annotated Tag", "## PyPI Verification and GitHub Release"),
+            ("## Candidate Merge Boundary", "## Ledger Authorization Boundary", '"${parents[0]}" "$merge_sha"'),
+            ("## Ledger Authorization Boundary", "## Protected Preflight", '"${candidate_parents[0]}" "$candidate_sha"'),
+            ("## Protected Preflight", "## Annotated Tag", '"${candidate_parents[0]}" "$candidate_sha"'),
+            ("## Annotated Tag", "## PyPI Verification and GitHub Release", '"${candidate_parents[0]}" "$candidate_sha"'),
         )
-        required = (
-            'candidate_sha="$(git log --first-parent -1 --format=%H "$trusted_main_sha" -- release/0.3.1.md)"',
-            'EXPECTED_BASE_SHA="f665e26c5124afbf0c5c7c7aad495897a0d70176"',
-            'candidate_parents=($(git show -s --format=%P "$candidate_sha"))',
-            'test "${candidate_parents[0]}" = "$EXPECTED_BASE_SHA"',
-            'candidate_paths=($(git diff-tree --no-commit-id --name-only -r "${candidate_parents[0]}" "$candidate_sha"))',
-            'test "${#candidate_paths[@]}" -eq 8',
-        )
-        for start_heading, end_heading in sections:
+        for start_heading, end_heading, revision in sections:
             section = self.doc[self.doc.index(start_heading):self.doc.index(end_heading)]
-            block_start = section.index("```bash")
-            block_end = section.index("```", block_start + len("```bash"))
-            block = section[block_start:block_end]
-            for phrase in required:
-                with self.subTest(section=start_heading, phrase=phrase):
-                    self.assertIn(phrase, block)
+            with self.subTest(section=start_heading):
+                start = section.index('authorized_candidate_paths="$(')
+                end_marker = 'test "$candidate_paths" = "$authorized_candidate_paths"'
+                gate = section[start:section.index(end_marker, start) + len(end_marker)]
+                self.assertIn(
+                    f"git diff-tree --no-commit-id --name-only -r {revision} | LC_ALL=C sort",
+                    gate,
+                )
+                passed = run_candidate_path_gate(gate, "\n".join(AUTHORIZED_CANDIDATE_PATHS[::-1]))
+                self.assertEqual(passed.returncode, 0)
+                rejected = run_candidate_path_gate(
+                    gate, "\n".join((*AUTHORIZED_CANDIDATE_PATHS, "unexpected.txt"))
+                )
+                self.assertNotEqual(rejected.returncode, 0)
+        self.assertEqual(self.doc.count('authorized_candidate_paths="$('), 4)
+        self.assertNotIn('test "${#candidate_paths[@]}" -eq 8', self.doc)
 
     def test_authorization_diff_requires_explicit_two_tree_comparison(self):
         with tempfile.TemporaryDirectory() as temporary:
